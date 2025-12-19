@@ -1,0 +1,5 @@
+#!/bin/bash
+
+# config_callback - Post-configuration callback
+
+exit 0

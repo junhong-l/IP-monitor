@@ -1,0 +1,14 @@
+#!/bin/bash
+
+# uninstall_callback - Post-uninstallation callback
+# Executed after application files are deleted
+
+# Note: TRIM_PKGVAR and TRIM_APPDEST may already be deleted at this point
+
+# Clean up user config data if needed
+DATA_DIR="${TRIM_DATA_SHARE_PATHS%%:*}"
+if [ -n "${DATA_DIR}" ] && [ -d "${DATA_DIR}" ]; then
+    rm -rf "${DATA_DIR}"
+fi
+
+exit 0

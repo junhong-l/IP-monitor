@@ -1,0 +1,22 @@
+#!/bin/bash
+
+# uninstall_init - Pre-uninstallation preparation
+# Executed after main stop, before files are deleted
+
+LOG_FILE="${TRIM_PKGVAR}/info.log"
+
+log_msg() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - [uninstall_init] $1" >> ${LOG_FILE}
+}
+
+log_msg "Uninstall init started..."
+
+# Clean up cache if exists
+if [ -d "${TRIM_PKGVAR}/cache" ]; then
+    log_msg "Cleaning cache directory..."
+    rm -rf "${TRIM_PKGVAR}/cache"
+fi
+
+log_msg "Uninstall init completed."
+
+exit 0

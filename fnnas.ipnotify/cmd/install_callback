@@ -1,0 +1,32 @@
+#!/bin/bash
+
+# install_callback - Post-installation callback
+# Executed after files are extracted, before main start is called
+
+LOG_FILE="${TRIM_PKGVAR}/info.log"
+DATA_DIR="${TRIM_DATA_SHARE_PATHS%%:*}"
+
+log_msg() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - [install_callback] $1" >> ${LOG_FILE}
+}
+
+# Create log directory
+mkdir -p "$(dirname ${LOG_FILE})"
+
+log_msg "Install callback started..."
+
+# Ensure data directory exists
+if [ -n "${DATA_DIR}" ]; then
+    log_msg "Creating data directory: ${DATA_DIR}"
+    mkdir -p "${DATA_DIR}"
+fi
+
+# Ensure executable has proper permissions
+if [ -d "${TRIM_APPDEST}/server" ]; then
+    log_msg "Setting executable permissions..."
+    chmod +x "${TRIM_APPDEST}/server/email-notify" 2>/dev/null || true
+fi
+
+log_msg "Install callback completed."
+
+exit 0

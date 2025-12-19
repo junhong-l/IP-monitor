@@ -1,0 +1,14 @@
+{
+    "data-share": {
+        "shares": [
+            {
+                "name": "fnnas.ipnotify",
+                "permission": {
+                    "rw": [
+                        "fnnas.ipnotify"
+                    ]
+                }
+            }
+        ]
+    }
+}

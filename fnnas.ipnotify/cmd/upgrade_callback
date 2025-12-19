@@ -1,0 +1,5 @@
+#!/bin/bash
+
+# upgrade_callback - Post-upgrade callback
+
+exit 0

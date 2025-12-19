@@ -1,0 +1,24 @@
+# 编译输出
+email-notify.exe
+email-notify
+*.exe
+
+# 配置文件（包含敏感信息）
+config.json
+
+# 日志文件
+*.log
+
+# Go相关
+go.sum
+
+# IDE相关
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 系统文件
+.DS_Store
+Thumbs.db

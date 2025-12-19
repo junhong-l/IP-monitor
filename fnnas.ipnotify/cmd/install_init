@@ -1,0 +1,6 @@
+#!/bin/bash
+
+# install_init - Pre-installation preparation
+# Executed before files are extracted
+
+exit 0

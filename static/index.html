@@ -1,0 +1,712 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IP地址监控系统</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Microsoft YaHei', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .card {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+
+        .card h2 {
+            color: #667eea;
+            margin-bottom: 20px;
+            font-size: 1.5em;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: bold;
+        }
+
+        .form-group input,
+        .form-group textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        .form-group input:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .form-group textarea {
+            min-height: 100px;
+            resize: vertical;
+            font-family: inherit;
+        }
+
+        .form-group small {
+            display: block;
+            margin-top: 5px;
+            color: #666;
+            font-size: 0.9em;
+        }
+
+        .btn {
+            padding: 12px 30px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: bold;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+            margin-left: 10px;
+        }
+
+        .btn-secondary:hover {
+            background: #5a6268;
+            transform: translateY(-2px);
+        }
+
+        .ip-list {
+            margin-top: 15px;
+        }
+
+        .ip-item {
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            border-left: 4px solid #667eea;
+        }
+
+        .ip-item h4 {
+            color: #667eea;
+            margin-bottom: 8px;
+            font-size: 1.1em;
+        }
+
+        .ip-item p {
+            color: #333;
+            font-family: 'Courier New', monospace;
+            font-size: 1em;
+        }
+
+        .ip-item .no-data {
+            color: #999;
+            font-style: italic;
+        }
+
+        .message {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .message.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .message.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .message.show {
+            display: block;
+            animation: slideDown 0.3s ease;
+        }
+
+        @keyframes slideDown {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #667eea;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .smtp-presets {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 10px;
+        }
+
+        .smtp-btn {
+            padding: 8px 16px;
+            border: 2px solid #667eea;
+            border-radius: 20px;
+            background: white;
+            color: #667eea;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: 500;
+        }
+
+        .smtp-btn:hover {
+            background: #667eea;
+            color: white;
+            transform: translateY(-1px);
+        }
+
+        .smtp-btn.active {
+            background: #667eea;
+            color: white;
+        }
+
+        .mode-switch {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .mode-btn {
+            flex: 1;
+            padding: 15px 20px;
+            border: 2px solid #667eea;
+            border-radius: 10px;
+            background: white;
+            color: #667eea;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .mode-btn:hover {
+            background: #f0f4ff;
+        }
+
+        .mode-btn.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-color: transparent;
+        }
+
+        .interval-presets {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 10px;
+        }
+
+        .interval-btn {
+            padding: 8px 16px;
+            border: 2px solid #28a745;
+            border-radius: 20px;
+            background: white;
+            color: #28a745;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: 500;
+        }
+
+        .interval-btn:hover {
+            background: #28a745;
+            color: white;
+        }
+
+        .interval-btn.active {
+            background: #28a745;
+            color: white;
+        }
+
+        .monitor-status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            margin-top: 15px;
+        }
+
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #6c757d;
+        }
+
+        .status-dot.running {
+            background: #28a745;
+            animation: pulse 2s infinite;
+        }
+
+        .status-dot.stopped {
+            background: #dc3545;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 10px;
+            }
+
+            .card {
+                padding: 20px;
+            }
+
+            .header h1 {
+                font-size: 2em;
+            }
+
+            .button-group {
+                flex-direction: column;
+            }
+
+            .btn-secondary {
+                margin-left: 0;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🌐 IP地址监控系统</h1>
+            <p>自动监控并通知IP地址变化</p>
+        </div>
+
+        <div id="message" class="message"></div>
+
+        <!-- 配置卡片 -->
+        <div class="card">
+            <h2>📧 邮件配置</h2>
+            <form id="configForm">
+                <div class="form-group">
+                    <label for="senderEmail">发件人邮箱：</label>
+                    <input type="email" id="senderEmail" required placeholder="example@gmail.com">
+                </div>
+
+                <div class="form-group">
+                    <label for="senderPassword">邮箱密码/授权码：</label>
+                    <input type="password" id="senderPassword" placeholder="留空则保持不变">
+                    <small>对于Gmail、QQ邮箱等，需要使用授权码而非登录密码</small>
+                </div>
+
+                <div class="form-group">
+                    <label for="smtpServer">SMTP服务器：</label>
+                    <div class="smtp-presets">
+                        <button type="button" class="smtp-btn" onclick="setSmtp('smtp.qq.com', 587)">📧 QQ邮箱</button>
+                        <button type="button" class="smtp-btn" onclick="setSmtp('smtp.163.com', 587)">📧 163邮箱</button>
+                        <button type="button" class="smtp-btn" onclick="setSmtp('smtp.gmail.com', 587)">📧 Gmail</button>
+                        <button type="button" class="smtp-btn" onclick="setSmtp('smtp.exmail.qq.com', 587)">📧 腾讯企业邮</button>
+                        <button type="button" class="smtp-btn" onclick="setSmtp('smtp-mail.outlook.com', 587)">📧 Outlook</button>
+                        <button type="button" class="smtp-btn" onclick="setSmtp('smtp.126.com', 587)">📧 126邮箱</button>
+                        <button type="button" class="smtp-btn" onclick="setSmtp('smtp.sina.com', 587)">📧 新浪邮箱</button>
+                        <button type="button" class="smtp-btn" onclick="setSmtp('smtp.aliyun.com', 465)">📧 阿里云邮箱</button>
+                    </div>
+                    <input type="text" id="smtpServer" required placeholder="smtp.gmail.com" style="margin-top: 10px;">
+                </div>
+
+                <div class="form-group">
+                    <label for="smtpPort">SMTP端口：</label>
+                    <input type="number" id="smtpPort" required placeholder="587">
+                    <small>常用端口: 587(TLS), 465(SSL), 25(非加密)</small>
+                </div>
+
+                <div class="form-group">
+                    <label for="recipients">收件人邮箱：</label>
+                    <textarea id="recipients" required placeholder="每行一个邮箱地址&#10;example1@gmail.com&#10;example2@gmail.com"></textarea>
+                    <small>可以设置多个收件人，每行一个邮箱地址</small>
+                </div>
+
+                <div class="button-group">
+                    <button type="submit" class="btn btn-primary">💾 保存配置</button>
+                    <button type="button" class="btn btn-secondary" onclick="testEmail()">✉️ 发送测试邮件</button>
+                </div>
+            </form>
+        </div>
+
+        <!-- 监控设置卡片 -->
+        <div class="card">
+            <h2>⚙️ 监控设置</h2>
+            <div class="form-group">
+                <label>监控模式：</label>
+                <div class="mode-switch">
+                    <button type="button" class="mode-btn" id="modeManual" onclick="setMode(false)">🖐️ 手动模式</button>
+                    <button type="button" class="mode-btn" id="modeAuto" onclick="setMode(true)">⏰ 自动模式</button>
+                </div>
+                <small>手动模式需要手动点击检查，自动模式会定时检查IP变化</small>
+            </div>
+
+            <div class="form-group" id="intervalGroup" style="display: none;">
+                <label for="intervalMinutes">检测间隔（分钟）：</label>
+                <div class="interval-presets">
+                    <button type="button" class="interval-btn" onclick="setInterval(5)">5分钟</button>
+                    <button type="button" class="interval-btn" onclick="setInterval(10)">10分钟</button>
+                    <button type="button" class="interval-btn" onclick="setInterval(30)">30分钟</button>
+                    <button type="button" class="interval-btn" onclick="setInterval(60)">1小时</button>
+                    <button type="button" class="interval-btn" onclick="setInterval(120)">2小时</button>
+                    <button type="button" class="interval-btn" onclick="setInterval(360)">6小时</button>
+                </div>
+                <input type="number" id="intervalMinutes" min="1" max="1440" value="30" style="margin-top: 10px;">
+                <small>设置自动检测IP变化的时间间隔，最小1分钟，最大1440分钟（24小时）</small>
+            </div>
+
+            <div id="monitorStatus" class="monitor-status">
+                <span class="status-dot" id="statusDot"></span>
+                <span id="statusText">监控状态: 未知</span>
+            </div>
+
+            <div class="button-group" style="margin-top: 15px;">
+                <button type="button" class="btn btn-primary" onclick="saveMonitorConfig()">💾 保存监控设置</button>
+                <button type="button" class="btn btn-secondary" onclick="checkIPNow()">🔍 立即检查IP</button>
+            </div>
+        </div>
+
+        <!-- IP信息卡片 -->
+        <div class="card">
+            <h2>🔍 当前IP地址信息</h2>
+            <button class="btn btn-primary" onclick="refreshIPs()" style="margin-bottom: 15px;">🔄 刷新IP信息</button>
+            <div id="ipInfo" class="ip-list">
+                <div class="loading">
+                    <div class="spinner"></div>
+                    <p>正在获取IP信息...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 页面加载时获取配置和IP信息
+        window.onload = function() {
+            loadConfig();
+            refreshIPs();
+            loadMonitorStatus();
+        };
+
+        // 当前模式
+        let currentAutoMode = false;
+
+        // 设置SMTP预设
+        function setSmtp(server, port) {
+            document.getElementById('smtpServer').value = server;
+            document.getElementById('smtpPort').value = port;
+            
+            // 高亮当前选中的按钮
+            document.querySelectorAll('.smtp-btn').forEach(btn => btn.classList.remove('active'));
+            event.target.classList.add('active');
+            
+            showMessage('已选择: ' + server + ':' + port, 'success');
+        }
+
+        // 设置监控模式
+        function setMode(autoMode) {
+            currentAutoMode = autoMode;
+            document.getElementById('modeManual').classList.toggle('active', !autoMode);
+            document.getElementById('modeAuto').classList.toggle('active', autoMode);
+            document.getElementById('intervalGroup').style.display = autoMode ? 'block' : 'none';
+        }
+
+        // 设置时间间隔
+        function setInterval(minutes) {
+            document.getElementById('intervalMinutes').value = minutes;
+            document.querySelectorAll('.interval-btn').forEach(btn => btn.classList.remove('active'));
+            event.target.classList.add('active');
+        }
+
+        // 加载监控状态
+        async function loadMonitorStatus() {
+            try {
+                const response = await fetch('/api/monitor/status');
+                const status = await response.json();
+                
+                currentAutoMode = status.auto_mode;
+                setMode(status.auto_mode);
+                document.getElementById('intervalMinutes').value = status.interval_minutes || 30;
+                
+                updateStatusDisplay(status.running);
+            } catch (error) {
+                console.error('加载监控状态失败:', error);
+            }
+        }
+
+        // 更新状态显示
+        function updateStatusDisplay(running) {
+            const dot = document.getElementById('statusDot');
+            const text = document.getElementById('statusText');
+            
+            dot.className = 'status-dot ' + (running ? 'running' : 'stopped');
+            
+            if (currentAutoMode) {
+                text.textContent = running ? 
+                    '监控状态: 自动监控运行中 ✅' : 
+                    '监控状态: 自动监控已停止 ⏸️';
+            } else {
+                text.textContent = '监控状态: 手动模式 🖐️';
+            }
+        }
+
+        // 保存监控配置
+        async function saveMonitorConfig() {
+            const config = {
+                auto_mode: currentAutoMode,
+                interval_minutes: parseInt(document.getElementById('intervalMinutes').value)
+            };
+
+            try {
+                const response = await fetch('/api/config/save', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(config)
+                });
+
+                if (response.ok) {
+                    showMessage('监控设置保存成功！', 'success');
+                    setTimeout(loadMonitorStatus, 500);
+                } else {
+                    showMessage('保存监控设置失败', 'error');
+                }
+            } catch (error) {
+                showMessage('保存监控设置时发生错误: ' + error.message, 'error');
+            }
+        }
+
+        // 立即检查IP
+        async function checkIPNow() {
+            showMessage('正在检查IP地址...', 'success');
+            
+            try {
+                const response = await fetch('/api/check-ip', { method: 'POST' });
+                const result = await response.json();
+                
+                if (result.changed) {
+                    showMessage(result.message + ' (旧: ' + (result.old_ips.join(', ') || '无') + ' → 新: ' + result.current_ips.join(', ') + ')', 'success');
+                } else {
+                    showMessage('IP地址无变化: ' + result.current_ips.join(', '), 'success');
+                }
+                
+                refreshIPs();
+            } catch (error) {
+                showMessage('检查IP失败: ' + error.message, 'error');
+            }
+        }
+
+        // 加载配置
+        async function loadConfig() {
+            try {
+                const response = await fetch('/api/config');
+                const config = await response.json();
+                
+                document.getElementById('senderEmail').value = config.sender_email || '';
+                document.getElementById('smtpServer').value = config.smtp_server || '';
+                document.getElementById('smtpPort').value = config.smtp_port || 587;
+                
+                if (config.recipients && config.recipients.length > 0) {
+                    document.getElementById('recipients').value = config.recipients.join('\n');
+                }
+            } catch (error) {
+                console.error('加载配置失败:', error);
+            }
+        }
+
+        // 保存配置
+        document.getElementById('configForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const recipients = document.getElementById('recipients').value
+                .split('\n')
+                .map(email => email.trim())
+                .filter(email => email.length > 0);
+
+            const config = {
+                sender_email: document.getElementById('senderEmail').value,
+                sender_password: document.getElementById('senderPassword').value,
+                smtp_server: document.getElementById('smtpServer').value,
+                smtp_port: parseInt(document.getElementById('smtpPort').value),
+                recipients: recipients
+            };
+
+            try {
+                const response = await fetch('/api/config/save', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(config)
+                });
+
+                if (response.ok) {
+                    showMessage('配置保存成功！', 'success');
+                    document.getElementById('senderPassword').value = '';
+                } else {
+                    showMessage('保存配置失败，请检查输入', 'error');
+                }
+            } catch (error) {
+                showMessage('保存配置时发生错误: ' + error.message, 'error');
+            }
+        });
+
+        // 刷新IP信息
+        async function refreshIPs() {
+            const ipInfoDiv = document.getElementById('ipInfo');
+            ipInfoDiv.innerHTML = '<div class="loading"><div class="spinner"></div><p>正在获取IP信息...</p></div>';
+
+            try {
+                const response = await fetch('/api/ips');
+                const ips = await response.json();
+
+                let html = '';
+
+                html += '<div class="ip-item">';
+                html += '<h4>🌍 公网 IPv4</h4>';
+                html += '<p>' + (ips.public_ipv4 && ips.public_ipv4.length > 0 ? ips.public_ipv4.join(', ') : '<span class="no-data">未检测到</span>') + '</p>';
+                html += '</div>';
+
+                html += '<div class="ip-item">';
+                html += '<h4>🌍 公网 IPv6</h4>';
+                html += '<p>' + (ips.public_ipv6 && ips.public_ipv6.length > 0 ? ips.public_ipv6.join(', ') : '<span class="no-data">未检测到</span>') + '</p>';
+                html += '</div>';
+
+                html += '<div class="ip-item">';
+                html += '<h4>🏠 私有 IPv4</h4>';
+                html += '<p>' + (ips.private_ipv4 && ips.private_ipv4.length > 0 ? ips.private_ipv4.join(', ') : '<span class="no-data">未检测到</span>') + '</p>';
+                html += '</div>';
+
+                html += '<div class="ip-item">';
+                html += '<h4>🏠 私有 IPv6</h4>';
+                html += '<p>' + (ips.private_ipv6 && ips.private_ipv6.length > 0 ? ips.private_ipv6.join(', ') : '<span class="no-data">未检测到</span>') + '</p>';
+                html += '</div>';
+
+                ipInfoDiv.innerHTML = html;
+            } catch (error) {
+                ipInfoDiv.innerHTML = '<div class="ip-item"><p class="no-data">获取IP信息失败: ' + error.message + '</p></div>';
+            }
+        }
+
+        // 发送测试邮件
+        async function testEmail() {
+            showMessage('正在发送测试邮件...', 'success');
+
+            try {
+                const response = await fetch('/api/test-email', {
+                    method: 'POST'
+                });
+
+                if (response.ok) {
+                    showMessage('测试邮件发送成功！请检查收件箱', 'success');
+                } else {
+                    const error = await response.text();
+                    showMessage('发送测试邮件失败: ' + error, 'error');
+                }
+            } catch (error) {
+                showMessage('发送测试邮件时发生错误: ' + error.message, 'error');
+            }
+        }
+
+        // 显示消息
+        function showMessage(text, type) {
+            const messageDiv = document.getElementById('message');
+            messageDiv.textContent = text;
+            messageDiv.className = 'message ' + type + ' show';
+
+            setTimeout(() => {
+                messageDiv.classList.remove('show');
+            }, 5000);
+        }
+    </script>
+</body>
+</html>
