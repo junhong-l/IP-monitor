@@ -110,6 +110,181 @@ func sendIPChangeNotification(oldIPs, newIPs []string) error {
 	return sendEmail(subject, body)
 }
 
+// 检查某个IP类型是否发生了变化
+func isTypeChanged(changes []IPChange, typeName string) bool {
+	for _, c := range changes {
+		if c.Type == typeName {
+			return true
+		}
+	}
+	return false
+}
+
+// 发送所有IP变化通知邮件（公网+私网）
+func sendAllIPChangeNotification(oldIPs, newIPs *IPInfo, changes []IPChange) error {
+	subject := "IP地址变更通知"
+	
+	// 获取变化的类型名称
+	changeTypes := []string{}
+	for _, c := range changes {
+		changeTypes = append(changeTypes, c.Type)
+	}
+	changeTypesStr := strings.Join(changeTypes, "、")
+	
+	// 根据是否变化决定颜色（新IP部分：变化的用黄色高亮，旧IP部分：变化的用红色删除线）
+	newPublicIPv4Style := "color: #fff;"
+	newPublicIPv6Style := "color: #fff;"
+	newPrivateIPv4Style := "color: #fff;"
+	newPrivateIPv6Style := "color: #fff;"
+	oldPublicIPv4Style := "color: #495057;"
+	oldPublicIPv6Style := "color: #495057;"
+	oldPrivateIPv4Style := "color: #495057;"
+	oldPrivateIPv6Style := "color: #495057;"
+	
+	if isTypeChanged(changes, "公网IPv4") {
+		newPublicIPv4Style = "color: #ffeb3b; font-weight: bold;"
+		oldPublicIPv4Style = "color: #dc3545; text-decoration: line-through;"
+	}
+	if isTypeChanged(changes, "公网IPv6") {
+		newPublicIPv6Style = "color: #ffeb3b; font-weight: bold;"
+		oldPublicIPv6Style = "color: #dc3545; text-decoration: line-through;"
+	}
+	if isTypeChanged(changes, "私网IPv4") {
+		newPrivateIPv4Style = "color: #ffeb3b; font-weight: bold;"
+		oldPrivateIPv4Style = "color: #dc3545; text-decoration: line-through;"
+	}
+	if isTypeChanged(changes, "私网IPv6") {
+		newPrivateIPv6Style = "color: #ffeb3b; font-weight: bold;"
+		oldPrivateIPv6Style = "color: #dc3545; text-decoration: line-through;"
+	}
+
+	body := fmt.Sprintf(`
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+</head>
+<body style="margin: 0; padding: 0; font-family: 'Segoe UI', 'Microsoft YaHei', Arial, sans-serif; background-color: #f5f7fa;">
+    <table width="100%%" cellpadding="0" cellspacing="0" style="background-color: #f5f7fa; padding: 30px 0;">
+        <tr>
+            <td align="center">
+                <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); overflow: hidden;">
+                    <!-- 头部 -->
+                    <tr>
+                        <td style="background: linear-gradient(135deg, #667eea 0%%, #764ba2 100%%); padding: 40px 30px; text-align: center;">
+                            <h1 style="color: #ffffff; margin: 0; font-size: 28px; font-weight: 600;">
+                                🌐 IP地址变更通知
+                            </h1>
+                            <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0 0; font-size: 14px;">
+                                检测到变化: %s
+                            </p>
+                        </td>
+                    </tr>
+                    
+                    <!-- 当前IP（新） -->
+                    <tr>
+                        <td style="padding: 30px 30px 15px 30px;">
+                            <table width="100%%" cellpadding="0" cellspacing="0">
+                                <tr>
+                                    <td style="background: linear-gradient(135deg, #28a745 0%%, #20c997 100%%); padding: 20px; border-radius: 12px;">
+                                        <h3 style="color: #fff; margin: 0 0 15px 0; font-size: 16px;">✅ 当前IP地址（新）</h3>
+                                        <table width="100%%" cellpadding="8" cellspacing="0">
+                                            <tr>
+                                                <td style="color: rgba(255,255,255,0.8); font-size: 13px; width: 100px;">🌍 公网IPv4</td>
+                                                <td style="%s font-size: 14px; font-family: 'Courier New', monospace;">%s</td>
+                                            </tr>
+                                            <tr>
+                                                <td style="color: rgba(255,255,255,0.8); font-size: 13px;">🌐 公网IPv6</td>
+                                                <td style="%s font-size: 12px; font-family: 'Courier New', monospace; word-break: break-all;">%s</td>
+                                            </tr>
+                                            <tr>
+                                                <td style="color: rgba(255,255,255,0.8); font-size: 13px;">🏠 私网IPv4</td>
+                                                <td style="%s font-size: 14px; font-family: 'Courier New', monospace;">%s</td>
+                                            </tr>
+                                            <tr>
+                                                <td style="color: rgba(255,255,255,0.8); font-size: 13px;">🏠 私网IPv6</td>
+                                                <td style="%s font-size: 12px; font-family: 'Courier New', monospace; word-break: break-all;">%s</td>
+                                            </tr>
+                                        </table>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+                    
+                    <!-- 旧IP -->
+                    <tr>
+                        <td style="padding: 15px 30px 30px 30px;">
+                            <table width="100%%" cellpadding="0" cellspacing="0">
+                                <tr>
+                                    <td style="background: #f8f9fa; padding: 20px; border-radius: 12px; border: 1px solid #e9ecef;">
+                                        <h3 style="color: #6c757d; margin: 0 0 15px 0; font-size: 16px;">📋 变更前IP地址（旧）</h3>
+                                        <table width="100%%" cellpadding="8" cellspacing="0">
+                                            <tr>
+                                                <td style="color: #6c757d; font-size: 13px; width: 100px;">🌍 公网IPv4</td>
+                                                <td style="%s font-size: 14px; font-family: 'Courier New', monospace;">%s</td>
+                                            </tr>
+                                            <tr>
+                                                <td style="color: #6c757d; font-size: 13px;">🌐 公网IPv6</td>
+                                                <td style="%s font-size: 12px; font-family: 'Courier New', monospace; word-break: break-all;">%s</td>
+                                            </tr>
+                                            <tr>
+                                                <td style="color: #6c757d; font-size: 13px;">🏠 私网IPv4</td>
+                                                <td style="%s font-size: 14px; font-family: 'Courier New', monospace;">%s</td>
+                                            </tr>
+                                            <tr>
+                                                <td style="color: #6c757d; font-size: 13px;">🏠 私网IPv6</td>
+                                                <td style="%s font-size: 12px; font-family: 'Courier New', monospace; word-break: break-all;">%s</td>
+                                            </tr>
+                                        </table>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+                    
+                    <!-- 底部 -->
+                    <tr>
+                        <td style="background-color: #f8f9fa; padding: 25px 30px; border-top: 1px solid #e9ecef;">
+                            <table width="100%%" cellpadding="0" cellspacing="0">
+                                <tr>
+                                    <td style="color: #6c757d; font-size: 13px;">
+                                        <p style="margin: 0 0 5px 0;">📧 此邮件由 <strong>IP地址监控系统</strong> 自动发送</p>
+                                        <p style="margin: 0;">🕐 检测时间: %s</p>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>
+`,
+		changeTypesStr,
+		newPublicIPv4Style, getIPListStr(newIPs.PublicIPv4),
+		newPublicIPv6Style, getIPListStr(newIPs.PublicIPv6),
+		newPrivateIPv4Style, getIPListStr(newIPs.PrivateIPv4),
+		newPrivateIPv6Style, getIPListStr(newIPs.PrivateIPv6),
+		oldPublicIPv4Style, getIPListStr(oldIPs.PublicIPv4),
+		oldPublicIPv6Style, getIPListStr(oldIPs.PublicIPv6),
+		oldPrivateIPv4Style, getIPListStr(oldIPs.PrivateIPv4),
+		oldPrivateIPv6Style, getIPListStr(oldIPs.PrivateIPv6),
+		getCurrentTime())
+
+	return sendEmail(subject, body)
+}
+
+// 获取IP列表字符串
+func getIPListStr(ips []string) string {
+	if len(ips) == 0 {
+		return "无"
+	}
+	return strings.Join(ips, ", ")
+}
+
 // 发送测试邮件
 func sendTestEmail() error {
 	subject := "测试邮件 - IP地址监控系统"

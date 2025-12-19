@@ -109,7 +109,6 @@ fnnas.ipnotify/
 
 在Windows PowerShell中：
 ```powershell
-cd d:\Code\email-notify
 $env:GOOS="linux"
 $env:GOARCH="amd64"
 $env:CGO_ENABLED="0"

@@ -22,14 +22,15 @@ var (
 )
 
 type Config struct {
-	SenderEmail    string   `json:"sender_email"`
-	SenderPassword string   `json:"sender_password"`
-	SMTPServer     string   `json:"smtp_server"`
-	SMTPPort       int      `json:"smtp_port"`
-	Recipients     []string `json:"recipients"`
-	LastPublicIPs  []string `json:"last_public_ips"`
-	AutoMode       bool     `json:"auto_mode"`
-	IntervalMinutes int     `json:"interval_minutes"`
+	SenderEmail     string   `json:"sender_email"`
+	SenderPassword  string   `json:"sender_password"`
+	SMTPServer      string   `json:"smtp_server"`
+	SMTPPort        int      `json:"smtp_port"`
+	Recipients      []string `json:"recipients"`
+	LastAllIPs      *IPInfo  `json:"last_all_ips"`      // 记录上次的所有IP，用于对比变化
+	AutoMode        bool     `json:"auto_mode"`
+	IntervalMinutes int      `json:"interval_minutes"`
+	MonitorTypes    []string `json:"monitor_types"`     // 监控类型: public_ipv4, public_ipv6, private_ipv4, private_ipv6
 }
 
 var config Config
@@ -54,7 +55,8 @@ func main() {
 	http.HandleFunc("/", handleIndex)
 	http.HandleFunc("/static/", handleStatic)
 	http.HandleFunc("/api/config", handleConfig)
-	http.HandleFunc("/api/config/save", handleSaveConfig)
+	http.HandleFunc("/api/config/email", handleSaveEmailConfig)
+	http.HandleFunc("/api/config/monitor", handleSaveMonitorConfig)
 	http.HandleFunc("/api/ips", handleGetIPs)
 	http.HandleFunc("/api/test-email", handleTestEmail)
 	http.HandleFunc("/api/check-ip", handleCheckIP)
@@ -76,9 +78,9 @@ func loadConfig() {
 		config = Config{
 			SMTPPort:        587,
 			Recipients:      []string{},
-			LastPublicIPs:   []string{},
 			AutoMode:        false,
 			IntervalMinutes: 30,
+			MonitorTypes:    []string{"public_ipv4", "public_ipv6", "private_ipv4", "private_ipv6"}, // 默认监控所有
 		}
 		return
 	}
@@ -90,6 +92,10 @@ func loadConfig() {
 	// 默认值处理
 	if config.IntervalMinutes <= 0 {
 		config.IntervalMinutes = 30
+	}
+	// 如果没有设置监控类型，默认监控所有
+	if len(config.MonitorTypes) == 0 {
+		config.MonitorTypes = []string{"public_ipv4", "public_ipv6", "private_ipv4", "private_ipv6"}
 	}
 }
 
@@ -160,15 +166,40 @@ func restartIPMonitor() {
 func checkAndNotifyIPChange() {
 	log.Println("开始检查IP地址...")
 	
-	currentIPs := getCurrentPublicIPs()
+	// 重新加载配置文件，确保使用最新的配置
+	loadConfig()
+	
+	currentIPs := getAllIPs()
+	
+	// 第一次运行，LastAllIPs 为空，只记录不通知
+	if config.LastAllIPs == nil {
+		log.Println("首次运行，记录当前IP地址（不发送通知）")
+		config.LastAllIPs = &currentIPs
+		saveConfig()
+		return
+	}
+	
+	// 检查上次记录是否为空（也是首次有效记录）
+	isFirstRecord := len(config.LastAllIPs.PublicIPv4) == 0 && 
+		len(config.LastAllIPs.PublicIPv6) == 0 && 
+		len(config.LastAllIPs.PrivateIPv4) == 0 && 
+		len(config.LastAllIPs.PrivateIPv6) == 0
+	
+	if isFirstRecord {
+		log.Println("首次记录IP地址（不发送通知）")
+		config.LastAllIPs = &currentIPs
+		saveConfig()
+		return
+	}
 	
 	// 检查是否有变化
-	if hasIPChanged(config.LastPublicIPs, currentIPs) {
-		log.Println("检测到公网IP变化")
+	changes := compareAllIPs(config.LastAllIPs, &currentIPs)
+	if len(changes) > 0 {
+		log.Printf("检测到IP变化: %v", changes)
 		
 		// 发送通知邮件
 		if config.SenderEmail != "" && len(config.Recipients) > 0 {
-			err := sendIPChangeNotification(config.LastPublicIPs, currentIPs)
+			err := sendAllIPChangeNotification(config.LastAllIPs, &currentIPs, changes)
 			if err != nil {
 				log.Printf("发送邮件失败: %v", err)
 			} else {
@@ -177,10 +208,10 @@ func checkAndNotifyIPChange() {
 		}
 		
 		// 更新保存的IP
-		config.LastPublicIPs = currentIPs
+		config.LastAllIPs = &currentIPs
 		saveConfig()
 	} else {
-		log.Println("公网IP无变化")
+		log.Println("所有IP地址无变化")
 	}
 }
 
@@ -201,6 +232,87 @@ func hasIPChanged(oldIPs, newIPs []string) bool {
 	}
 	
 	return false
+}
+
+// IPChange 表示IP变化信息
+type IPChange struct {
+	Type    string   `json:"type"`    // 类型: public_ipv4, public_ipv6, private_ipv4, private_ipv6
+	Added   []string `json:"added"`   // 新增的IP
+	Removed []string `json:"removed"` // 移除的IP
+}
+
+// 检查是否监控某种IP类型
+func shouldMonitor(ipType string) bool {
+	for _, t := range config.MonitorTypes {
+		if t == ipType {
+			return true
+		}
+	}
+	return false
+}
+
+// 比较所有IP，返回变化列表（根据监控类型过滤）
+func compareAllIPs(oldIPs, newIPs *IPInfo) []IPChange {
+	var changes []IPChange
+	
+	// 比较公网IPv4
+	if shouldMonitor("public_ipv4") {
+		if added, removed := compareIPList(oldIPs.PublicIPv4, newIPs.PublicIPv4); len(added) > 0 || len(removed) > 0 {
+			changes = append(changes, IPChange{Type: "公网IPv4", Added: added, Removed: removed})
+		}
+	}
+	
+	// 比较公网IPv6
+	if shouldMonitor("public_ipv6") {
+		if added, removed := compareIPList(oldIPs.PublicIPv6, newIPs.PublicIPv6); len(added) > 0 || len(removed) > 0 {
+			changes = append(changes, IPChange{Type: "公网IPv6", Added: added, Removed: removed})
+		}
+	}
+	
+	// 比较私网IPv4
+	if shouldMonitor("private_ipv4") {
+		if added, removed := compareIPList(oldIPs.PrivateIPv4, newIPs.PrivateIPv4); len(added) > 0 || len(removed) > 0 {
+			changes = append(changes, IPChange{Type: "私网IPv4", Added: added, Removed: removed})
+		}
+	}
+	
+	// 比较私网IPv6
+	if shouldMonitor("private_ipv6") {
+		if added, removed := compareIPList(oldIPs.PrivateIPv6, newIPs.PrivateIPv6); len(added) > 0 || len(removed) > 0 {
+			changes = append(changes, IPChange{Type: "私网IPv6", Added: added, Removed: removed})
+		}
+	}
+	
+	return changes
+}
+
+// 比较两个IP列表，返回新增和移除的IP
+func compareIPList(oldList, newList []string) (added, removed []string) {
+	oldMap := make(map[string]bool)
+	newMap := make(map[string]bool)
+	
+	for _, ip := range oldList {
+		oldMap[ip] = true
+	}
+	for _, ip := range newList {
+		newMap[ip] = true
+	}
+	
+	// 找出新增的
+	for _, ip := range newList {
+		if !oldMap[ip] {
+			added = append(added, ip)
+		}
+	}
+	
+	// 找出移除的
+	for _, ip := range oldList {
+		if !newMap[ip] {
+			removed = append(removed, ip)
+		}
+	}
+	
+	return
 }
 
 func handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -258,48 +370,81 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(safeConfig)
 }
 
-func handleSaveConfig(w http.ResponseWriter, r *http.Request) {
+// 保存邮件配置（独立模块）
+func handleSaveEmailConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "方法不允许", http.StatusMethodNotAllowed)
 		return
 	}
 
-	var newConfig struct {
-		SenderEmail     string   `json:"sender_email"`
-		SenderPassword  string   `json:"sender_password"`
-		SMTPServer      string   `json:"smtp_server"`
-		SMTPPort        int      `json:"smtp_port"`
-		Recipients      []string `json:"recipients"`
-		AutoMode        bool     `json:"auto_mode"`
-		IntervalMinutes int      `json:"interval_minutes"`
+	var emailConfig struct {
+		SenderEmail    string   `json:"sender_email"`
+		SenderPassword string   `json:"sender_password"`
+		SMTPServer     string   `json:"smtp_server"`
+		SMTPPort       int      `json:"smtp_port"`
+		Recipients     []string `json:"recipients"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&newConfig); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&emailConfig); err != nil {
+		http.Error(w, "解析请求失败", http.StatusBadRequest)
+		return
+	}
+
+	// 只更新邮件相关配置
+	if emailConfig.SenderEmail != "" {
+		config.SenderEmail = emailConfig.SenderEmail
+	}
+	if emailConfig.SenderPassword != "" {
+		config.SenderPassword = emailConfig.SenderPassword
+	}
+	if emailConfig.SMTPServer != "" {
+		config.SMTPServer = emailConfig.SMTPServer
+	}
+	if emailConfig.SMTPPort > 0 {
+		config.SMTPPort = emailConfig.SMTPPort
+	}
+	if emailConfig.Recipients != nil {
+		config.Recipients = emailConfig.Recipients
+	}
+
+	if err := saveConfig(); err != nil {
+		http.Error(w, "保存配置失败", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
+// 保存监控配置（独立模块）
+func handleSaveMonitorConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "方法不允许", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var monitorConfig struct {
+		AutoMode        bool     `json:"auto_mode"`
+		IntervalMinutes int      `json:"interval_minutes"`
+		MonitorTypes    []string `json:"monitor_types"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&monitorConfig); err != nil {
 		http.Error(w, "解析请求失败", http.StatusBadRequest)
 		return
 	}
 
 	// 检查是否需要重启监控
-	needRestart := config.AutoMode != newConfig.AutoMode || 
-		config.IntervalMinutes != newConfig.IntervalMinutes
+	needRestart := config.AutoMode != monitorConfig.AutoMode || 
+		config.IntervalMinutes != monitorConfig.IntervalMinutes
 
-	// 更新配置
-	if newConfig.SenderEmail != "" {
-		config.SenderEmail = newConfig.SenderEmail
+	// 只更新监控相关配置
+	config.AutoMode = monitorConfig.AutoMode
+	if monitorConfig.IntervalMinutes > 0 {
+		config.IntervalMinutes = monitorConfig.IntervalMinutes
 	}
-	if newConfig.SenderPassword != "" {
-		config.SenderPassword = newConfig.SenderPassword
-	}
-	if newConfig.SMTPServer != "" {
-		config.SMTPServer = newConfig.SMTPServer
-	}
-	if newConfig.SMTPPort > 0 {
-		config.SMTPPort = newConfig.SMTPPort
-	}
-	config.Recipients = newConfig.Recipients
-	config.AutoMode = newConfig.AutoMode
-	if newConfig.IntervalMinutes > 0 {
-		config.IntervalMinutes = newConfig.IntervalMinutes
+	if monitorConfig.MonitorTypes != nil {
+		config.MonitorTypes = monitorConfig.MonitorTypes
 	}
 
 	if err := saveConfig(); err != nil {
@@ -358,21 +503,57 @@ func handleCheckIP(w http.ResponseWriter, r *http.Request) {
 
 	log.Println("手动触发IP检查...")
 	
-	currentIPs := getCurrentPublicIPs()
-	changed := hasIPChanged(config.LastPublicIPs, currentIPs)
+	// 重新加载配置文件，确保使用最新的配置
+	loadConfig()
+	
+	currentIPs := getAllIPs()
+	
+	// 检查是否是首次记录
+	isFirstRecord := config.LastAllIPs == nil || 
+		(len(config.LastAllIPs.PublicIPv4) == 0 && 
+		len(config.LastAllIPs.PublicIPv6) == 0 && 
+		len(config.LastAllIPs.PrivateIPv4) == 0 && 
+		len(config.LastAllIPs.PrivateIPv6) == 0)
+	
+	if isFirstRecord {
+		// 首次记录，保存当前IP，不发送通知
+		config.LastAllIPs = &currentIPs
+		saveConfig()
+		
+		result := struct {
+			Changed    bool       `json:"changed"`
+			Changes    []IPChange `json:"changes"`
+			CurrentIPs *IPInfo    `json:"current_ips"`
+			EmailSent  bool       `json:"email_sent"`
+			Message    string     `json:"message"`
+		}{
+			Changed:    false,
+			Changes:    []IPChange{},
+			CurrentIPs: &currentIPs,
+			EmailSent:  false,
+			Message:    "首次记录IP地址完成，后续变化将会通知",
+		}
+		
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(result)
+		return
+	}
+	
+	changes := compareAllIPs(config.LastAllIPs, &currentIPs)
+	changed := len(changes) > 0
 	
 	result := struct {
-		Changed   bool     `json:"changed"`
-		OldIPs    []string `json:"old_ips"`
-		CurrentIPs []string `json:"current_ips"`
-		EmailSent bool     `json:"email_sent"`
-		Message   string   `json:"message"`
+		Changed    bool       `json:"changed"`
+		Changes    []IPChange `json:"changes"`
+		CurrentIPs *IPInfo    `json:"current_ips"`
+		EmailSent  bool       `json:"email_sent"`
+		Message    string     `json:"message"`
 	}{
 		Changed:    changed,
-		OldIPs:     config.LastPublicIPs,
-		CurrentIPs: currentIPs,
+		Changes:    changes,
+		CurrentIPs: &currentIPs,
 		EmailSent:  false,
-		Message:    "IP地址无变化",
+		Message:    "所有IP地址无变化",
 	}
 	
 	if changed {
@@ -380,7 +561,7 @@ func handleCheckIP(w http.ResponseWriter, r *http.Request) {
 		
 		// 发送通知邮件
 		if config.SenderEmail != "" && len(config.Recipients) > 0 {
-			err := sendIPChangeNotification(config.LastPublicIPs, currentIPs)
+			err := sendAllIPChangeNotification(config.LastAllIPs, &currentIPs, changes)
 			if err != nil {
 				result.Message = fmt.Sprintf("IP变化已检测，但邮件发送失败: %v", err)
 			} else {
@@ -390,7 +571,7 @@ func handleCheckIP(w http.ResponseWriter, r *http.Request) {
 		}
 		
 		// 更新保存的IP
-		config.LastPublicIPs = currentIPs
+		config.LastAllIPs = &currentIPs
 		saveConfig()
 	}
 	
@@ -410,13 +591,15 @@ func handleMonitorStatus(w http.ResponseWriter, r *http.Request) {
 	monitorMu.Unlock()
 
 	status := struct {
-		AutoMode        bool `json:"auto_mode"`
-		Running         bool `json:"running"`
-		IntervalMinutes int  `json:"interval_minutes"`
+		AutoMode        bool     `json:"auto_mode"`
+		Running         bool     `json:"running"`
+		IntervalMinutes int      `json:"interval_minutes"`
+		MonitorTypes    []string `json:"monitor_types"`
 	}{
 		AutoMode:        config.AutoMode,
 		Running:         running,
 		IntervalMinutes: config.IntervalMinutes,
+		MonitorTypes:    config.MonitorTypes,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

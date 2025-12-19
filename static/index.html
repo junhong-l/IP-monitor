@@ -157,37 +157,61 @@
         }
 
         .message {
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 20px;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            padding: 20px 40px;
+            border-radius: 12px;
             display: none;
+            z-index: 1000;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+            font-size: 16px;
+            font-weight: 500;
+            max-width: 80%;
+            text-align: center;
+        }
+
+        .message-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.4);
+            z-index: 999;
+            display: none;
+        }
+
+        .message-overlay.show {
+            display: block;
         }
 
         .message.success {
             background: #d4edda;
             color: #155724;
-            border: 1px solid #c3e6cb;
+            border: 2px solid #c3e6cb;
         }
 
         .message.error {
             background: #f8d7da;
             color: #721c24;
-            border: 1px solid #f5c6cb;
+            border: 2px solid #f5c6cb;
         }
 
         .message.show {
             display: block;
-            animation: slideDown 0.3s ease;
+            animation: popIn 0.3s ease;
         }
 
-        @keyframes slideDown {
+        @keyframes popIn {
             from {
                 opacity: 0;
-                transform: translateY(-10px);
+                transform: translate(-50%, -50%) scale(0.8);
             }
             to {
                 opacity: 1;
-                transform: translateY(0);
+                transform: translate(-50%, -50%) scale(1);
             }
         }
 
@@ -306,6 +330,60 @@
             color: white;
         }
 
+        .ip-type-selector {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .ip-type-checkbox {
+            display: none;
+        }
+
+        .ip-type-label {
+            display: flex;
+            align-items: center;
+            padding: 10px 16px;
+            border: 2px solid #17a2b8;
+            border-radius: 20px;
+            background: white;
+            color: #17a2b8;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: 500;
+        }
+
+        .ip-type-label:hover {
+            background: #e7f5f8;
+        }
+
+        .ip-type-checkbox:checked + .ip-type-label {
+            background: #17a2b8;
+            color: white;
+        }
+
+        .ip-type-label::before {
+            content: '';
+            width: 16px;
+            height: 16px;
+            border: 2px solid currentColor;
+            border-radius: 4px;
+            margin-right: 8px;
+            display: inline-block;
+            transition: all 0.2s;
+        }
+
+        .ip-type-checkbox:checked + .ip-type-label::before {
+            background: white;
+            border-color: white;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2317a2b8'%3E%3Cpath d='M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z'/%3E%3C/svg%3E");
+            background-size: 14px;
+            background-position: center;
+            background-repeat: no-repeat;
+        }
+
         .monitor-status {
             display: flex;
             align-items: center;
@@ -368,6 +446,7 @@
         </div>
 
         <div id="message" class="message"></div>
+        <div id="messageOverlay" class="message-overlay"></div>
 
         <!-- 配置卡片 -->
         <div class="card">
@@ -385,7 +464,7 @@
                 </div>
 
                 <div class="form-group">
-                    <label for="smtpServer">SMTP服务器：</label>
+                    <label for="smtpServer">SMTP服务器快捷配置：</label>
                     <div class="smtp-presets">
                         <button type="button" class="smtp-btn" onclick="setSmtp('smtp.qq.com', 587)">📧 QQ邮箱</button>
                         <button type="button" class="smtp-btn" onclick="setSmtp('smtp.163.com', 587)">📧 163邮箱</button>
@@ -428,6 +507,24 @@
                     <button type="button" class="mode-btn" id="modeAuto" onclick="setMode(true)">⏰ 自动模式</button>
                 </div>
                 <small>手动模式需要手动点击检查，自动模式会定时检查IP变化</small>
+            </div>
+
+            <div class="form-group">
+                <label>监控IP类型：</label>
+                <div class="ip-type-selector">
+                    <input type="checkbox" id="monitorPublicIPv4" class="ip-type-checkbox" value="public_ipv4" checked>
+                    <label for="monitorPublicIPv4" class="ip-type-label">🌍 公网IPv4</label>
+                    
+                    <input type="checkbox" id="monitorPublicIPv6" class="ip-type-checkbox" value="public_ipv6" checked>
+                    <label for="monitorPublicIPv6" class="ip-type-label">🌐 公网IPv6</label>
+                    
+                    <input type="checkbox" id="monitorPrivateIPv4" class="ip-type-checkbox" value="private_ipv4" checked>
+                    <label for="monitorPrivateIPv4" class="ip-type-label">🏠 私网IPv4</label>
+                    
+                    <input type="checkbox" id="monitorPrivateIPv6" class="ip-type-checkbox" value="private_ipv6" checked>
+                    <label for="monitorPrivateIPv6" class="ip-type-label">🏠 私网IPv6</label>
+                </div>
+                <small>选择需要监控的IP类型，当选中的IP类型发生变化时会发送通知</small>
             </div>
 
             <div class="form-group" id="intervalGroup" style="display: none;">
@@ -516,6 +613,14 @@
                 setMode(status.auto_mode);
                 document.getElementById('intervalMinutes').value = status.interval_minutes || 30;
                 
+                // 加载监控类型
+                if (status.monitor_types && status.monitor_types.length > 0) {
+                    document.getElementById('monitorPublicIPv4').checked = status.monitor_types.includes('public_ipv4');
+                    document.getElementById('monitorPublicIPv6').checked = status.monitor_types.includes('public_ipv6');
+                    document.getElementById('monitorPrivateIPv4').checked = status.monitor_types.includes('private_ipv4');
+                    document.getElementById('monitorPrivateIPv6').checked = status.monitor_types.includes('private_ipv6');
+                }
+                
                 updateStatusDisplay(status.running);
             } catch (error) {
                 console.error('加载监控状态失败:', error);
@@ -540,13 +645,26 @@
 
         // 保存监控配置
         async function saveMonitorConfig() {
+            // 获取选中的监控类型
+            const monitorTypes = [];
+            if (document.getElementById('monitorPublicIPv4').checked) monitorTypes.push('public_ipv4');
+            if (document.getElementById('monitorPublicIPv6').checked) monitorTypes.push('public_ipv6');
+            if (document.getElementById('monitorPrivateIPv4').checked) monitorTypes.push('private_ipv4');
+            if (document.getElementById('monitorPrivateIPv6').checked) monitorTypes.push('private_ipv6');
+            
+            if (monitorTypes.length === 0) {
+                showMessage('请至少选择一种IP类型进行监控', 'error');
+                return;
+            }
+            
             const config = {
                 auto_mode: currentAutoMode,
-                interval_minutes: parseInt(document.getElementById('intervalMinutes').value)
+                interval_minutes: parseInt(document.getElementById('intervalMinutes').value),
+                monitor_types: monitorTypes
             };
 
             try {
-                const response = await fetch('/api/config/save', {
+                const response = await fetch('/api/config/monitor', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -574,9 +692,10 @@
                 const result = await response.json();
                 
                 if (result.changed) {
-                    showMessage(result.message + ' (旧: ' + (result.old_ips.join(', ') || '无') + ' → 新: ' + result.current_ips.join(', ') + ')', 'success');
+                    let changeInfo = result.changes.map(c => c.type).join(', ');
+                    showMessage(result.message + ' (' + changeInfo + ')', 'success');
                 } else {
-                    showMessage('IP地址无变化: ' + result.current_ips.join(', '), 'success');
+                    showMessage('所有监控的IP地址无变化', 'success');
                 }
                 
                 refreshIPs();
@@ -598,9 +717,27 @@
                 if (config.recipients && config.recipients.length > 0) {
                     document.getElementById('recipients').value = config.recipients.join('\n');
                 }
+                
+                // 高亮匹配的SMTP预设按钮
+                highlightSmtpButton(config.smtp_server);
             } catch (error) {
                 console.error('加载配置失败:', error);
             }
+        }
+        
+        // 高亮匹配的SMTP按钮
+        function highlightSmtpButton(server) {
+            document.querySelectorAll('.smtp-btn').forEach(btn => {
+                btn.classList.remove('active');
+                // 从按钮的onclick属性中提取服务器地址进行匹配
+                const onclick = btn.getAttribute('onclick');
+                if (onclick && server) {
+                    const match = onclick.match(/setSmtp\('([^']+)'/);
+                    if (match && match[1] === server) {
+                        btn.classList.add('active');
+                    }
+                }
+            });
         }
 
         // 保存配置
@@ -621,7 +758,7 @@
             };
 
             try {
-                const response = await fetch('/api/config/save', {
+                const response = await fetch('/api/config/email', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -700,12 +837,27 @@
         // 显示消息
         function showMessage(text, type) {
             const messageDiv = document.getElementById('message');
+            const overlay = document.getElementById('messageOverlay');
             messageDiv.textContent = text;
             messageDiv.className = 'message ' + type + ' show';
+            overlay.classList.add('show');
+
+            // 点击遮罩关闭
+            overlay.onclick = () => {
+                messageDiv.classList.remove('show');
+                overlay.classList.remove('show');
+            };
+
+            // 点击弹窗本身也关闭
+            messageDiv.onclick = () => {
+                messageDiv.classList.remove('show');
+                overlay.classList.remove('show');
+            };
 
             setTimeout(() => {
                 messageDiv.classList.remove('show');
-            }, 5000);
+                overlay.classList.remove('show');
+            }, 3000);
         }
     </script>
 </body>
