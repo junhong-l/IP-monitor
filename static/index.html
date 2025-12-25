@@ -1550,12 +1550,13 @@
                 
                 if (result.success) {
                     showMessage(`✅ 测试成功! IP: ${result.ip} (${result.duration_ms}ms)`, 'success');
-                    loadIPServices(); // 刷新服务列表
                 } else {
                     showMessage(`❌ 测试失败: ${result.error}`, 'error');
                 }
+                loadIPServices(); // 刷新服务列表
             } catch (error) {
                 showMessage('测试失败: ' + error.message, 'error');
+                loadIPServices(); // 刷新服务列表
             }
         }
 
