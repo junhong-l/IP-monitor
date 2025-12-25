@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -978,31 +979,50 @@ func handleTestIPService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	DBLogInfo("用户测试IP服务: [%s] %s", req.Type, req.URL)
+	   DBLogInfo("用户测试IP服务: [%s] %s", req.Type, req.URL)
 
-	result := TestIPService(req.URL, req.Type)
+	   // 查找服务ID
+	   var serviceID int64 = 0
+	   services, _ := GetIPServices("")
+	   norm := func(s string) string {
+		   return strings.TrimRight(strings.ToLower(s), "/")
+	   }
+	   for _, svc := range services {
+		   if norm(svc.URL) == norm(req.URL) && svc.Type == req.Type {
+			   serviceID = svc.ID
+			   break
+		   }
+	   }
 
-	// 记录测试结果到应用日志
-	if result.Success {
-		DBLogInfo("IP服务测试成功: [%s] %s -> %s (%dms)", req.Type, req.URL, result.IP, result.Duration)
-	} else {
-		DBLogWarn("IP服务测试失败: [%s] %s -> %s", req.Type, req.URL, result.Error)
-	}
+	   result := TestIPService(req.URL, req.Type)
 
-	// 记录测试日志
-	fetchLog := &IPFetchLog{
-		ServiceURL: req.URL,
-		IPType:     req.Type,
-		Success:    result.Success,
-		IP:         result.IP,
-		StatusCode: result.StatusCode,
-		Error:      result.Error,
-		Duration:   result.Duration,
-	}
-	SaveIPFetchLog(fetchLog)
+	   // 记录测试结果到应用日志
+	   if result.Success {
+		   DBLogInfo("IP服务测试成功: [%s] %s -> %s (%dms)", req.Type, req.URL, result.IP, result.Duration)
+	   } else {
+		   DBLogWarn("IP服务测试失败: [%s] %s -> %s", req.Type, req.URL, result.Error)
+	   }
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	   // 记录测试日志
+	   fetchLog := &IPFetchLog{
+		   ServiceID:  serviceID,
+		   ServiceURL: req.URL,
+		   IPType:     req.Type,
+		   Success:    result.Success,
+		   IP:         result.IP,
+		   StatusCode: result.StatusCode,
+		   Error:      result.Error,
+		   Duration:   result.Duration,
+	   }
+	   SaveIPFetchLog(fetchLog)
+
+	   // 更新服务统计（如果有ID）
+	   if serviceID > 0 {
+		   UpdateServiceStats(serviceID, result.Success, result.IP, result.Duration)
+	   }
+
+	   w.Header().Set("Content-Type", "application/json")
+	   json.NewEncoder(w).Encode(result)
 }
 
 // 添加IP服务
