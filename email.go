@@ -630,3 +630,84 @@ func formatIPList(ips []string) string {
 func getCurrentTime() string {
 	return fmt.Sprintf("%s", time.Now().Format("2006-01-02 15:04:05"))
 }
+
+// 发送IP获取警告邮件
+func sendIPFetchWarningEmail(warningType, oldIPv4, oldIPv6, newIPv4, newIPv6 string) error {
+	subject := fmt.Sprintf("⚠️ %s 获取异常警告", warningType)
+
+	var detailMsg string
+	if warningType == "IPv4" {
+		detailMsg = fmt.Sprintf(`
+			<p>之前的IPv4地址: <strong style="color: #dc3545;">%s</strong></p>
+			<p>当前获取结果: <strong style="color: #ffc107;">获取失败</strong></p>
+			<p>当前IPv6地址: <strong style="color: #28a745;">%s</strong> (正常)</p>
+		`, oldIPv4, newIPv6)
+	} else {
+		detailMsg = fmt.Sprintf(`
+			<p>之前的IPv6地址: <strong style="color: #dc3545;">%s</strong></p>
+			<p>当前获取结果: <strong style="color: #ffc107;">获取失败</strong></p>
+			<p>当前IPv4地址: <strong style="color: #28a745;">%s</strong> (正常)</p>
+		`, oldIPv6, newIPv4)
+	}
+
+	body := fmt.Sprintf(`
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+</head>
+<body style="margin: 0; padding: 0; font-family: 'Segoe UI', 'Microsoft YaHei', Arial, sans-serif; background-color: #f5f7fa;">
+    <table width="100%%" cellpadding="0" cellspacing="0" style="background-color: #f5f7fa; padding: 30px 0;">
+        <tr>
+            <td align="center">
+                <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); overflow: hidden;">
+                    <!-- 头部 -->
+                    <tr>
+                        <td style="background: linear-gradient(135deg, #ffc107 0%%, #ff9800 100%%); padding: 40px 30px; text-align: center;">
+                            <h1 style="color: #ffffff; margin: 0; font-size: 28px; font-weight: 600;">
+                                ⚠️ IP获取异常警告
+                            </h1>
+                            <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0 0; font-size: 14px;">
+                                %s 地址获取失败，但网络连接正常
+                            </p>
+                        </td>
+                    </tr>
+                    
+                    <!-- 内容区域 -->
+                    <tr>
+                        <td style="padding: 40px 30px;">
+                            <div style="background: #fff3cd; border-radius: 12px; padding: 20px; margin-bottom: 20px;">
+                                <h3 style="color: #856404; margin: 0 0 15px 0;">详细信息</h3>
+                                %s
+                            </div>
+                            
+                            <div style="background: #e7f5ff; border-radius: 12px; padding: 20px;">
+                                <h3 style="color: #0c5460; margin: 0 0 15px 0;">建议操作</h3>
+                                <ul style="color: #0c5460; margin: 0; padding-left: 20px;">
+                                    <li>检查IP获取服务是否正常工作</li>
+                                    <li>考虑添加更多备用IP获取服务</li>
+                                    <li>检查是否有防火墙或代理阻止访问</li>
+                                </ul>
+                            </div>
+                        </td>
+                    </tr>
+                    
+                    <!-- 底部 -->
+                    <tr>
+                        <td style="background-color: #f8f9fa; padding: 25px 30px; border-top: 1px solid #e9ecef;">
+                            <p style="color: #6c757d; font-size: 13px; margin: 0;">
+                                📧 此邮件由 <strong>IP地址监控系统</strong> 自动发送<br>
+                                🕐 检测时间: %s
+                            </p>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>
+`, warningType, detailMsg, getCurrentTime())
+
+	return sendEmail(subject, body)
+}
