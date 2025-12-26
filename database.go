@@ -361,6 +361,15 @@ func GetEnabledIPServices(ipType string) ([]IPService, error) {
 
 // AddIPService 添加IP服务
 func AddIPService(name, url, ipType string, priority int) (*IPService, error) {
+	// 先检查URL是否已存在
+	var existingID int64
+	var existingName string
+	err := db.QueryRow("SELECT id, name FROM ip_services WHERE url = ?", url).Scan(&existingID, &existingName)
+	if err == nil {
+		// URL已存在
+		return nil, fmt.Errorf("该服务URL已存在（服务名: %s）", existingName)
+	}
+
 	result, err := db.Exec(
 		"INSERT INTO ip_services (name, url, type, enabled, priority) VALUES (?, ?, ?, 1, ?)",
 		name, url, ipType, priority,

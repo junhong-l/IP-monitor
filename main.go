@@ -535,11 +535,12 @@ func handleSaveEmailConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := saveConfig(); err != nil {
+		DBLogError("保存邮件配置失败: %v", err)
 		http.Error(w, "保存配置失败", http.StatusInternalServerError)
 		return
 	}
 
-	DBLogInfo("用户保存邮件配置: 发件人=%s, SMTP=%s:%d, 收件人=%v", 
+	DBLogInfo("用户保存邮件配置成功: 发件人=%s, SMTP=%s:%d, 收件人=%v", 
 		config.SenderEmail, config.SMTPServer, config.SMTPPort, config.Recipients)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -578,6 +579,7 @@ func handleSaveMonitorConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := saveConfig(); err != nil {
+		DBLogError("保存监控配置失败: %v", err)
 		http.Error(w, "保存配置失败", http.StatusInternalServerError)
 		return
 	}
@@ -586,7 +588,7 @@ func handleSaveMonitorConfig(w http.ResponseWriter, r *http.Request) {
 	if config.AutoMode {
 		modeStr = fmt.Sprintf("自动(每%d分钟)", config.IntervalMinutes)
 	}
-	DBLogInfo("用户保存监控配置: 模式=%s, 监控类型=%v", modeStr, config.MonitorTypes)
+	DBLogInfo("用户保存监控配置成功: 模式=%s, 监控类型=%v", modeStr, config.MonitorTypes)
 
 	// 如果监控配置变化，重启监控
 	if needRestart {
@@ -900,13 +902,16 @@ func handleCleanLogs(w http.ResponseWriter, r *http.Request) {
 		req.RetentionHours = 1
 	}
 
+	DBLogInfo("用户手动清理日志: 保留%d小时内的日志", req.RetentionHours)
+
 	deleted, err := CleanOldLogsWithCount(req.RetentionHours)
 	if err != nil {
+		DBLogError("手动清理日志失败: %v", err)
 		http.Error(w, fmt.Sprintf("清理日志失败: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	DBLogInfo("手动清理日志完成，删除了 %d 条记录", deleted)
+	DBLogInfo("手动清理日志成功，删除了 %d 条记录", deleted)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -1054,9 +1059,12 @@ func handleAddIPService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	DBLogInfo("用户尝试添加IP服务: %s (%s) - %s", req.Name, req.Type, req.URL)
+
 	// 先测试服务是否可用
 	result := TestIPService(req.URL, req.Type)
 	if !result.Success {
+		DBLogWarn("添加IP服务失败 - 服务测试失败: %s (%s) - %s, 错误: %s", req.Name, req.Type, req.URL, result.Error)
 		http.Error(w, fmt.Sprintf("服务测试失败: %s", result.Error), http.StatusBadRequest)
 		return
 	}
@@ -1064,11 +1072,12 @@ func handleAddIPService(w http.ResponseWriter, r *http.Request) {
 	// 添加服务
 	service, err := AddIPService(req.Name, req.URL, req.Type, req.Priority)
 	if err != nil {
+		DBLogWarn("添加IP服务失败: %s (%s) - %s, 错误: %v", req.Name, req.Type, req.URL, err)
 		http.Error(w, fmt.Sprintf("添加服务失败: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	DBLogInfo("添加IP服务: %s (%s) - %s", req.Name, req.Type, req.URL)
+	DBLogInfo("添加IP服务成功: %s (%s) - %s", req.Name, req.Type, req.URL)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -1096,11 +1105,6 @@ func handleUpdateIPService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := UpdateIPService(req.ID, req.Enabled, req.Priority); err != nil {
-		http.Error(w, fmt.Sprintf("更新服务失败: %v", err), http.StatusInternalServerError)
-		return
-	}
-
 	// 获取服务名称用于日志
 	serviceName := "未知服务"
 	if svc, err := GetIPServiceByID(req.ID); err == nil {
@@ -1111,7 +1115,14 @@ func handleUpdateIPService(w http.ResponseWriter, r *http.Request) {
 	if !req.Enabled {
 		status = "停用"
 	}
-	DBLogInfo("更新IP服务: %s, 状态=%s, 优先级=%d", serviceName, status, req.Priority)
+
+	if err := UpdateIPService(req.ID, req.Enabled, req.Priority); err != nil {
+		DBLogWarn("更新IP服务失败: %s, 状态=%s, 优先级=%d, 错误: %v", serviceName, status, req.Priority, err)
+		http.Error(w, fmt.Sprintf("更新服务失败: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	DBLogInfo("更新IP服务成功: %s, 状态=%s, 优先级=%d", serviceName, status, req.Priority)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
@@ -1135,16 +1146,19 @@ func handleDeleteIPService(w http.ResponseWriter, r *http.Request) {
 
 	// 先获取服务名称用于日志
 	serviceName := "未知服务"
+	serviceURL := ""
 	if svc, err := GetIPServiceByID(req.ID); err == nil {
 		serviceName = svc.Name
+		serviceURL = svc.URL
 	}
 
 	if err := DeleteIPService(req.ID); err != nil {
+		DBLogWarn("删除IP服务失败: %s (%s), 错误: %v", serviceName, serviceURL, err)
 		http.Error(w, fmt.Sprintf("删除服务失败: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	DBLogInfo("删除IP服务: %s", serviceName)
+	DBLogInfo("删除IP服务成功: %s (%s)", serviceName, serviceURL)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})

@@ -120,8 +120,13 @@ func FetchPublicIP(ipType string, maxRounds int) (string, error) {
 			UpdateServiceStats(svc.ID, result.Success, result.IP, result.Duration)
 
 			if result.Success {
-				DBLogInfo("[%s] 从 %s 获取成功: %s (耗时: %dms)", ipType, svc.Name, result.IP, result.Duration)
-				return result.IP, nil
+				finalIP := result.IP
+				// 对于IPv6，尝试选择更好的本地公网地址（优先EUI-64格式）
+				if ipType == "ipv6" {
+					finalIP = SelectBestPublicIPv6(result.IP)
+				}
+				DBLogInfo("[%s] 从 %s 获取成功: %s (耗时: %dms)", ipType, svc.Name, finalIP, result.Duration)
+				return finalIP, nil
 			}
 
 			DBLogWarn("[%s] 从 %s 获取失败: %s (耗时: %dms)", ipType, svc.Name, result.Error, result.Duration)
@@ -318,6 +323,213 @@ func isPrivateIPv6(ip net.IP) bool {
 	}
 
 	return false
+}
+
+// isPublicIPv6 判断是否为公网IPv6地址
+func isPublicIPv6(ip net.IP) bool {
+	// 排除环回地址
+	if ip.IsLoopback() {
+		return false
+	}
+
+	// 排除链路本地地址 (fe80::/10)
+	if ip.IsLinkLocalUnicast() {
+		return false
+	}
+
+	// 排除唯一本地地址 (fc00::/7, 包括 fd00::/8)
+	_, uniqueLocal, _ := net.ParseCIDR("fc00::/7")
+	if uniqueLocal.Contains(ip) {
+		return false
+	}
+
+	// 排除组播地址 (ff00::/8)
+	if ip.IsMulticast() {
+		return false
+	}
+
+	// 排除未指定地址 (::)
+	if ip.IsUnspecified() {
+		return false
+	}
+
+	// 排除文档地址 (2001:db8::/32)
+	_, doc, _ := net.ParseCIDR("2001:db8::/32")
+	if doc.Contains(ip) {
+		return false
+	}
+
+	return true
+}
+
+// isEUI64Address 判断是否为EUI-64格式的IPv6地址（基于MAC地址生成，更稳定）
+// EUI-64地址的特征：第11和12字节是 ff:fe
+func isEUI64Address(ip net.IP) bool {
+	ip16 := ip.To16()
+	if ip16 == nil {
+		return false
+	}
+	// 检查接口标识符部分是否包含 ff:fe（EUI-64特征）
+	return ip16[11] == 0xff && ip16[12] == 0xfe
+}
+
+// isSLAACAddress 判断是否为SLAAC生成的地址（包括EUI-64和隐私扩展）
+// SLAAC地址的前64位是网络前缀，后64位是接口标识符
+func isSLAACAddress(ip net.IP) bool {
+	// 公网IPv6地址通常都是SLAAC或DHCPv6生成的
+	return isPublicIPv6(ip)
+}
+
+// GetLocalPublicIPv6 获取本地公网IPv6地址
+// 优先返回最长的地址（接口标识符部分非零位最多的），通常是可被外部访问的地址
+func GetLocalPublicIPv6() []string {
+	var publicIPv6 []string
+
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return publicIPv6
+	}
+
+	for _, iface := range interfaces {
+		// 跳过未启用的接口和环回接口
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+
+		for _, addr := range addrs {
+			ipnet, ok := addr.(*net.IPNet)
+			if !ok {
+				continue
+			}
+
+			ip := ipnet.IP
+			// 只处理IPv6
+			if ip.To4() != nil {
+				continue
+			}
+
+			if isPublicIPv6(ip) {
+				fullIP := FormatIPv6Full(ip)
+				publicIPv6 = append(publicIPv6, fullIP)
+			}
+		}
+	}
+
+	// 按接口标识符部分的非零字节数排序，优先选择"更完整"的地址
+	// 像 2408:8266:bb01:176b:3cb7:e39f:eb1c:a459 会排在 2408:8266:bb01:176b::8af 前面
+	if len(publicIPv6) > 1 {
+		sortIPv6ByComplexity(publicIPv6)
+	}
+
+	return publicIPv6
+}
+
+// sortIPv6ByComplexity 按接口标识符的复杂度排序（非零字节越多越靠前）
+func sortIPv6ByComplexity(ips []string) {
+	// 简单冒泡排序
+	for i := 0; i < len(ips)-1; i++ {
+		for j := i + 1; j < len(ips); j++ {
+			if countNonZeroBytes(ips[j]) > countNonZeroBytes(ips[i]) {
+				ips[i], ips[j] = ips[j], ips[i]
+			}
+		}
+	}
+}
+
+// countNonZeroBytes 计算IPv6地址接口标识符部分（后64位）的非零字节数
+func countNonZeroBytes(ipStr string) int {
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return 0
+	}
+	ip16 := ip.To16()
+	if ip16 == nil {
+		return 0
+	}
+	// 只计算后8字节（接口标识符部分）
+	count := 0
+	for i := 8; i < 16; i++ {
+		if ip16[i] != 0 {
+			count++
+		}
+	}
+	return count
+}
+
+// SelectBestPublicIPv6 选择最佳的公网IPv6地址
+// 优先使用本地网卡获取的公网IPv6地址（选择接口标识符最完整的）
+// 如果外部API返回的是公网地址，查找本地同前缀的更完整地址
+func SelectBestPublicIPv6(externalIP string) string {
+	if externalIP == "" {
+		return ""
+	}
+
+	extIP := net.ParseIP(externalIP)
+	if extIP == nil {
+		return externalIP
+	}
+
+	// 检查外部返回的IP是否是公网地址
+	if !isPublicIPv6(extIP) {
+		// 如果外部返回的不是公网地址，直接返回
+		return externalIP
+	}
+
+	// 获取本地公网IPv6地址列表（已按复杂度排序，最完整的在前面）
+	localPublicIPs := GetLocalPublicIPv6()
+	if len(localPublicIPs) == 0 {
+		return externalIP
+	}
+
+	// 获取外部IP的前缀（前64位）
+	extIP16 := extIP.To16()
+	if extIP16 == nil {
+		return externalIP
+	}
+	extPrefix := extIP16[:8]
+
+	// 查找同前缀的本地地址，优先使用最完整的（列表已排序）
+	for _, localIPStr := range localPublicIPs {
+		localIP := net.ParseIP(localIPStr)
+		if localIP == nil {
+			continue
+		}
+
+		localIP16 := localIP.To16()
+		if localIP16 == nil {
+			continue
+		}
+
+		// 检查前缀是否相同（前64位）
+		localPrefix := localIP16[:8]
+		prefixMatch := true
+		for i := 0; i < 8; i++ {
+			if extPrefix[i] != localPrefix[i] {
+				prefixMatch = false
+				break
+			}
+		}
+
+		if prefixMatch {
+			// 找到同前缀的地址，检查是否比外部获取的更完整
+			extComplexity := countNonZeroBytes(externalIP)
+			localComplexity := countNonZeroBytes(localIPStr)
+			
+			if localComplexity > extComplexity {
+				DBLogInfo("[IPv6] 使用本地更完整的地址替代外部获取的地址: %s -> %s", externalIP, localIPStr)
+				return localIPStr
+			}
+			// 如果复杂度相同或外部更完整，使用外部的
+			break
+		}
+	}
+
+	return externalIP
 }
 
 // getAllIPs 获取所有IP地址信息（使用缓存，不重新获取公网IP）

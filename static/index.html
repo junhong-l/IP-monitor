@@ -218,6 +218,104 @@
             }
         }
 
+        /* 自定义确认对话框样式 */
+        .confirm-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1099;
+            display: none;
+            backdrop-filter: blur(2px);
+        }
+
+        .confirm-overlay.show {
+            display: block;
+        }
+
+        .confirm-dialog {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 1100;
+            display: none;
+        }
+
+        .confirm-dialog.show {
+            display: block;
+            animation: popIn 0.3s ease;
+        }
+
+        .confirm-content {
+            background: white;
+            border-radius: 16px;
+            padding: 30px;
+            min-width: 320px;
+            max-width: 90vw;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            text-align: center;
+        }
+
+        .confirm-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+        }
+
+        .confirm-text {
+            font-size: 16px;
+            color: #333;
+            margin-bottom: 25px;
+            line-height: 1.5;
+        }
+
+        .confirm-buttons {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+        }
+
+        .confirm-btn {
+            padding: 12px 30px;
+            border: none;
+            border-radius: 8px;
+            font-size: 15px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+            min-width: 100px;
+        }
+
+        .confirm-cancel {
+            background: #e9ecef;
+            color: #495057;
+        }
+
+        .confirm-cancel:hover {
+            background: #dee2e6;
+            transform: translateY(-2px);
+        }
+
+        .confirm-ok {
+            background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+            color: white;
+        }
+
+        .confirm-ok:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(220, 53, 69, 0.4);
+        }
+
+        .confirm-ok.primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+
+        .confirm-ok.primary:hover {
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
         .loading {
             text-align: center;
             padding: 20px;
@@ -808,6 +906,19 @@
         <div id="message" class="message"></div>
         <div id="messageOverlay" class="message-overlay"></div>
 
+        <!-- 自定义确认对话框 -->
+        <div id="confirmDialog" class="confirm-dialog">
+            <div class="confirm-content">
+                <div class="confirm-icon">⚠️</div>
+                <p id="confirmText" class="confirm-text"></p>
+                <div class="confirm-buttons">
+                    <button class="confirm-btn confirm-cancel" id="confirmCancel">取消</button>
+                    <button class="confirm-btn confirm-ok" id="confirmOK">确定</button>
+                </div>
+            </div>
+        </div>
+        <div id="confirmOverlay" class="confirm-overlay"></div>
+
         <!-- 配置卡片 -->
         <div class="card">
             <h2>📧 邮件配置</h2>
@@ -1289,6 +1400,60 @@
             messageTimer = setTimeout(closeMessage, 5000);
         }
 
+        // 自定义确认对话框
+        function showConfirm(text, options = {}) {
+            return new Promise((resolve) => {
+                const dialog = document.getElementById('confirmDialog');
+                const overlay = document.getElementById('confirmOverlay');
+                const textEl = document.getElementById('confirmText');
+                const okBtn = document.getElementById('confirmOK');
+                const cancelBtn = document.getElementById('confirmCancel');
+
+                textEl.textContent = text;
+                
+                // 设置按钮文字
+                okBtn.textContent = options.okText || '确定';
+                cancelBtn.textContent = options.cancelText || '取消';
+                
+                // 设置按钮样式
+                okBtn.className = 'confirm-btn confirm-ok' + (options.type === 'primary' ? ' primary' : '');
+                
+                // 设置图标
+                const iconEl = dialog.querySelector('.confirm-icon');
+                if (options.icon) {
+                    iconEl.textContent = options.icon;
+                } else {
+                    iconEl.textContent = options.type === 'primary' ? '❓' : '⚠️';
+                }
+
+                dialog.classList.add('show');
+                overlay.classList.add('show');
+
+                const cleanup = () => {
+                    dialog.classList.remove('show');
+                    overlay.classList.remove('show');
+                    okBtn.onclick = null;
+                    cancelBtn.onclick = null;
+                    overlay.onclick = null;
+                };
+
+                okBtn.onclick = () => {
+                    cleanup();
+                    resolve(true);
+                };
+
+                cancelBtn.onclick = () => {
+                    cleanup();
+                    resolve(false);
+                };
+
+                overlay.onclick = () => {
+                    cleanup();
+                    resolve(false);
+                };
+            });
+        }
+
         // ========== 日志相关函数 ==========
 
         // 加载日志配置
@@ -1350,7 +1515,12 @@
 
         // 立即清理日志
         async function cleanLogsNow() {
-            if (!confirm('确定要立即清理过期日志吗？')) return;
+            const confirmed = await showConfirm('确定要立即清理过期日志吗？', {
+                icon: '🗑️',
+                okText: '清理',
+                type: 'danger'
+            });
+            if (!confirmed) return;
             
             const hours = document.getElementById('logRetentionHours').value || 72;
             try {
@@ -1679,7 +1849,12 @@
 
         // 删除服务
         async function deleteService(id) {
-            if (!confirm('确定要删除此服务吗？')) return;
+            const confirmed = await showConfirm('确定要删除此服务吗？', {
+                icon: '🗑️',
+                okText: '删除',
+                type: 'danger'
+            });
+            if (!confirmed) return;
             
             try {
                 const response = await fetch('/api/ip-services/delete', {
