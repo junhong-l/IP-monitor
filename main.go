@@ -498,14 +498,18 @@ func compareAllIPs(oldIPs, newIPs *IPInfo) []IPChange {
 		}
 	}
 
-	// 比较私网IPv4（总是比较，不管监控配置）
-	if added, removed := compareIPList(oldIPs.PrivateIPv4, newIPs.PrivateIPv4); len(added) > 0 || len(removed) > 0 {
-		changes = append(changes, IPChange{Type: "私网IPv4", Added: added, Removed: removed})
+	// 比较私网IPv4（根据监控配置）
+	if shouldMonitor("private_ipv4") {
+		if added, removed := compareIPList(oldIPs.PrivateIPv4, newIPs.PrivateIPv4); len(added) > 0 || len(removed) > 0 {
+			changes = append(changes, IPChange{Type: "私网IPv4", Added: added, Removed: removed})
+		}
 	}
 
-	// 比较私网IPv6（总是比较，不管监控配置）
-	if added, removed := compareIPList(oldIPs.PrivateIPv6, newIPs.PrivateIPv6); len(added) > 0 || len(removed) > 0 {
-		changes = append(changes, IPChange{Type: "私网IPv6", Added: added, Removed: removed})
+	// 比较私网IPv6（根据监控配置）
+	if shouldMonitor("private_ipv6") {
+		if added, removed := compareIPList(oldIPs.PrivateIPv6, newIPs.PrivateIPv6); len(added) > 0 || len(removed) > 0 {
+			changes = append(changes, IPChange{Type: "私网IPv6", Added: added, Removed: removed})
+		}
 	}
 
 	return changes
