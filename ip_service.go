@@ -98,23 +98,28 @@ func FetchPublicIP(ipType string, maxRounds int) (string, error) {
 		return "", fmt.Errorf("没有可用的%s服务", ipType)
 	}
 
-	// 循环尝试多轮
-	for round := 0; round < maxRounds; round++ {
+	// 设置整体超时时间(30秒)
+	timeout := time.After(30 * time.Second)
+	round := 0
+
+	// 循环尝试多轮,使用带超时的select
+	for {
+		select {
+		case <-timeout:
+			// 超时,立即返回
+			return "", fmt.Errorf("获取%s超时(30秒)", ipType)
+		default:
+			// 继续尝试
+		}
+
+		// 检查是否已达到最大轮数
+		if round >= maxRounds {
+			return "", fmt.Errorf("所有%s服务均获取失败", ipType)
+		}
+
+		// 尝试当前轮的所有服务
 		for _, svc := range services {
 			result := TestIPService(svc.URL, ipType)
-
-			// 记录获取日志
-			fetchLog := &IPFetchLog{
-				ServiceID:  svc.ID,
-				ServiceURL: svc.URL,
-				IPType:     ipType,
-				Success:    result.Success,
-				IP:         result.IP,
-				StatusCode: result.StatusCode,
-				Error:      result.Error,
-				Duration:   result.Duration,
-			}
-			SaveIPFetchLog(fetchLog)
 
 			// 更新服务统计
 			UpdateServiceStats(svc.ID, result.Success, result.IP, result.Duration)
@@ -132,13 +137,13 @@ func FetchPublicIP(ipType string, maxRounds int) (string, error) {
 			DBLogWarn("[%s] 从 %s 获取失败: %s (耗时: %dms)", ipType, svc.Name, result.Error, result.Duration)
 		}
 
+		round++
+
 		// 每轮之间等待一下
-		if round < maxRounds-1 {
+		if round < maxRounds {
 			time.Sleep(2 * time.Second)
 		}
 	}
-
-	return "", fmt.Errorf("所有%s服务均获取失败", ipType)
 }
 
 // CheckNetworkConnectivity 检查网络连通性（通过阿里DNS）
@@ -258,6 +263,7 @@ func ValidateAndCompareIPs(oldIPv4, oldIPv6, newIPv4, newIPv6 string) (changed b
 }
 
 // FormatIPv6Full 将IPv6地址格式化为完整格式
+// 如果IP无效,返回空字符串。调用方应该检查返回值。
 func FormatIPv6Full(ip net.IP) string {
 	ip = ip.To16()
 	if ip == nil {
@@ -285,7 +291,10 @@ func GetLocalIPs() (privateIPv4, privateIPv6 []string) {
 			} else if ipnet.IP.To16() != nil {
 				// IPv6
 				if isPrivateIPv6(ipnet.IP) {
-					privateIPv6 = append(privateIPv6, FormatIPv6Full(ipnet.IP))
+					formatted := FormatIPv6Full(ipnet.IP)
+					if formatted != "" {
+						privateIPv6 = append(privateIPv6, formatted)
+					}
 				}
 			}
 		}
@@ -415,7 +424,9 @@ func GetLocalPublicIPv6() []string {
 
 			if isPublicIPv6(ip) {
 				fullIP := FormatIPv6Full(ip)
-				publicIPv6 = append(publicIPv6, fullIP)
+				if fullIP != "" {
+					publicIPv6 = append(publicIPv6, fullIP)
+				}
 			}
 		}
 	}
@@ -532,7 +543,7 @@ func SelectBestPublicIPv6(externalIP string) string {
 	return externalIP
 }
 
-// getAllIPs 获取所有IP地址信息（使用缓存，不重新获取公网IP）
+// getAllIPs 获取所有IP地址信息（从数据库读取最后保存的IP）
 func getAllIPs() IPInfo {
 	info := IPInfo{
 		PublicIPv4:  []string{},
@@ -541,16 +552,60 @@ func getAllIPs() IPInfo {
 		PrivateIPv6: []string{},
 	}
 
-	// 从配置中读取上次保存的公网IP（缓存）
-	if config.LastPublicIPv4 != "" && config.LastPublicIPv4 != DisconnectedIPv4 {
-		info.PublicIPv4 = []string{config.LastPublicIPv4}
-	}
-	if config.LastPublicIPv6 != "" && config.LastPublicIPv6 != DisconnectedIPv6 {
-		info.PublicIPv6 = []string{config.LastPublicIPv6}
+	// 从数据库读取上次保存的公网IP
+	lastIPs, err := GetAllLastIPs()
+	if err == nil {
+		// 根据监控类型读取
+		if shouldMonitor("public_ipv4") {
+			if ips, ok := lastIPs["public_ipv4"]; ok && len(ips) > 0 {
+				// 过滤掉断网占位符
+				validIPs := []string{}
+				for _, ip := range ips {
+					if ip != "" && ip != DisconnectedIPv4 {
+						validIPs = append(validIPs, ip)
+					}
+				}
+				if len(validIPs) > 0 {
+					info.PublicIPv4 = validIPs
+				}
+			}
+		}
+		if shouldMonitor("public_ipv6") {
+			if ips, ok := lastIPs["public_ipv6"]; ok && len(ips) > 0 {
+				// 过滤掉断网占位符
+				validIPs := []string{}
+				for _, ip := range ips {
+					if ip != "" && ip != DisconnectedIPv6 {
+						validIPs = append(validIPs, ip)
+					}
+				}
+				if len(validIPs) > 0 {
+					info.PublicIPv6 = validIPs
+				}
+			}
+		}
+		if shouldMonitor("private_ipv4") {
+			if ips, ok := lastIPs["private_ipv4"]; ok && len(ips) > 0 {
+				info.PrivateIPv4 = ips
+			}
+		}
+		if shouldMonitor("private_ipv6") {
+			if ips, ok := lastIPs["private_ipv6"]; ok && len(ips) > 0 {
+				info.PrivateIPv6 = ips
+			}
+		}
 	}
 
-	// 获取本地私网IP（这个很快，每次获取也没问题）
-	info.PrivateIPv4, info.PrivateIPv6 = GetLocalIPs()
+	// 如果数据库中没有公网IP，则实时获取私网IP
+	if len(info.PrivateIPv4) == 0 || len(info.PrivateIPv6) == 0 {
+		privateIPv4, privateIPv6 := GetLocalIPs()
+		if len(info.PrivateIPv4) == 0 {
+			info.PrivateIPv4 = privateIPv4
+		}
+		if len(info.PrivateIPv6) == 0 {
+			info.PrivateIPv6 = privateIPv6
+		}
+	}
 
 	return info
 }

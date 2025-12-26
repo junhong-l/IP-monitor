@@ -15,9 +15,11 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -25,38 +27,20 @@ import (
 var staticFiles embed.FS
 
 var (
-	port       = flag.Int("port", 8543, "服务监听端口（默认8543）")
-	configFile = "config.json"
-	dbFile     = "data.db"
+	port   = flag.Int("port", 8543, "服务监听端口（默认8543）")
+	dbFile = "data.db"
 )
 
-type Config struct {
-	SenderEmail       string   `json:"sender_email"`
-	SenderPassword    string   `json:"sender_password"`
-	SMTPServer        string   `json:"smtp_server"`
-	SMTPPort          int      `json:"smtp_port"`
-	Recipients        []string `json:"recipients"`
-	LastPublicIPv4    string   `json:"last_public_ipv4"`
-	LastPublicIPv6    string   `json:"last_public_ipv6"`
-	LastAllIPs        *IPInfo  `json:"last_all_ips"`
-	AutoMode          bool     `json:"auto_mode"`
-	IntervalMinutes   int      `json:"interval_minutes"`
-	MonitorTypes      []string `json:"monitor_types"`
-	LogRetentionHours int      `json:"log_retention_hours"` // 日志保留小时数
-}
-
-var config Config
 var (
 	monitorTicker *time.Ticker
 	monitorStop   chan bool
 	monitorMu     sync.Mutex
+
+	logCleanupStop chan bool
 )
 
 func main() {
 	flag.Parse()
-
-	// 加载配置
-	loadConfig()
 
 	// 初始化数据库
 	if err := InitDatabase(dbFile); err != nil {
@@ -64,17 +48,33 @@ func main() {
 	}
 	defer CloseDatabase()
 
+	// 初始化默认配置(首次运行时)
+	if err := InitDefaultConfig(); err != nil {
+		log.Fatalf("初始化默认配置失败: %v", err)
+	}
+
 	DBLogInfo("IP地址监控系统启动")
 
+	// 读取监控配置
+	monitorCfg, err := GetMonitorConfig()
+	if err != nil {
+		log.Fatalf("读取监控配置失败: %v", err)
+	}
+
 	// 启动日志清理定时任务（每小时清理一次）
-	retentionHours := config.LogRetentionHours
+	retentionHours := monitorCfg.LogRetentionHours
 	if retentionHours <= 0 {
 		retentionHours = 72 // 默认保留72小时（3天）
 	}
+	logCleanupStop = make(chan bool)
 	StartLogCleanupScheduler(retentionHours)
 
+	// 启动时立即检查一次IP变化（无论是否启用自动监控）
+	DBLogInfo("程序启动，开始检查IP地址...")
+	checkAndNotifyIPChange()
+
 	// 根据配置启动IP监控
-	if config.AutoMode {
+	if monitorCfg.AutoMode {
 		startIPMonitor()
 	}
 
@@ -90,7 +90,6 @@ func main() {
 	http.HandleFunc("/api/monitor/status", handleMonitorStatus)
 	http.HandleFunc("/api/logs", handleLogs)
 	http.HandleFunc("/api/logs/app", handleAppLogs)
-	http.HandleFunc("/api/logs/fetch", handleFetchLogs)
 	http.HandleFunc("/api/logs/config", handleLogConfig)
 	http.HandleFunc("/api/logs/clean", handleCleanLogs)
 	// IP服务管理API
@@ -106,51 +105,22 @@ func main() {
 
 	addr := fmt.Sprintf(":%d", *port)
 	DBLogInfo("服务器启动在端口 %d", *port)
-	log.Printf("服务器启动在端口 %d", *port)
-	log.Printf("请访问: http://localhost:%d", *port)
+
+	// 设置信号处理器,优雅关闭
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		<-sigChan
+		DBLogInfo("接收到关闭信号,正在停止服务...")
+		StopLogCleanupScheduler()
+		CloseDatabase()
+		os.Exit(0)
+	}()
 
 	if err := http.ListenAndServe(addr, nil); err != nil {
 		log.Fatal("启动服务器失败:", err)
 	}
-}
-
-func loadConfig() {
-	data, err := os.ReadFile(configFile)
-	if err != nil {
-		log.Println("未找到配置文件，使用默认配置")
-		config = Config{
-			SMTPPort:          587,
-			Recipients:        []string{},
-			AutoMode:          false,
-			IntervalMinutes:   30,
-			MonitorTypes:      []string{"public_ipv4", "public_ipv6", "private_ipv4", "private_ipv6"},
-			LogRetentionHours: 72, // 默认保留72小时（3天）
-		}
-		return
-	}
-
-	if err := json.Unmarshal(data, &config); err != nil {
-		log.Println("解析配置文件失败:", err)
-	}
-
-	// 默认值处理
-	if config.IntervalMinutes <= 0 {
-		config.IntervalMinutes = 30
-	}
-	if len(config.MonitorTypes) == 0 {
-		config.MonitorTypes = []string{"public_ipv4", "public_ipv6", "private_ipv4", "private_ipv6"}
-	}
-	if config.LogRetentionHours <= 0 {
-		config.LogRetentionHours = 72
-	}
-}
-
-func saveConfig() error {
-	data, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(configFile, data, 0644)
 }
 
 func startIPMonitor() {
@@ -165,16 +135,21 @@ func startIPMonitor() {
 		}
 	}
 
-	interval := time.Duration(config.IntervalMinutes) * time.Minute
+	// 从数据库读取监控配置
+	monitorCfg, err := GetMonitorConfig()
+	if err != nil {
+		DBLogError("读取监控配置失败: %v", err)
+		return
+	}
+
+	interval := time.Duration(monitorCfg.IntervalMinutes) * time.Minute
 	monitorTicker = time.NewTicker(interval)
 	monitorStop = make(chan bool)
 
-	DBLogInfo("启动自动监控，间隔: %d 分钟", config.IntervalMinutes)
+	DBLogInfo("启动自动监控，间隔: %d 分钟", monitorCfg.IntervalMinutes)
 
+	// 在锁保护内启动goroutine,确保monitorStop在goroutine启动前不会被关闭
 	go func() {
-		// 首次检查
-		checkAndNotifyIPChange()
-
 		for {
 			select {
 			case <-monitorTicker.C:
@@ -185,6 +160,8 @@ func startIPMonitor() {
 			}
 		}
 	}()
+
+	// Unlock在defer中执行,goroutine已经安全启动
 }
 
 func stopIPMonitor() {
@@ -196,7 +173,13 @@ func stopIPMonitor() {
 		monitorTicker = nil
 	}
 	if monitorStop != nil {
-		close(monitorStop)
+		// 安全关闭channel:使用select避免向已关闭channel发送
+		select {
+		case <-monitorStop:
+			// channel已关闭
+		default:
+			close(monitorStop)
+		}
 		monitorStop = nil
 	}
 	DBLogInfo("自动监控已停止")
@@ -204,7 +187,8 @@ func stopIPMonitor() {
 
 func restartIPMonitor() {
 	stopIPMonitor()
-	if config.AutoMode {
+	monitorCfg, err := GetMonitorConfig()
+	if err == nil && monitorCfg.AutoMode {
 		startIPMonitor()
 	}
 }
@@ -212,12 +196,9 @@ func restartIPMonitor() {
 func checkAndNotifyIPChange() {
 	DBLogInfo("开始检查IP地址...")
 
-	// 重新加载配置文件，确保使用最新的配置
-	loadConfig()
-
 	// 使用新的IP获取逻辑
 	ipv4, ipv6, networkOK := GetAllPublicIPs()
-	
+
 	// 获取本地私网IP
 	privateIPv4, privateIPv6 := GetLocalIPs()
 
@@ -235,93 +216,164 @@ func checkAndNotifyIPChange() {
 		currentIPs.PublicIPv6 = []string{ipv6}
 	}
 
-	// 保存IP记录
-	if ipv4 != "" {
-		SaveIPRecord("public_ipv4", ipv4)
-	}
-	if ipv6 != "" {
-		SaveIPRecord("public_ipv6", ipv6)
-	}
-
-	// 第一次运行，LastAllIPs 为空，只记录不通知
-	if config.LastAllIPs == nil {
-		DBLogInfo("首次运行，记录当前IP地址（不发送通知）")
-		config.LastAllIPs = &currentIPs
-		config.LastPublicIPv4 = ipv4
-		config.LastPublicIPv6 = ipv6
-		saveConfig()
+	// 从数据库读取上次的IP（根据监控类型）
+	lastIPs, err := GetAllLastIPs()
+	if err != nil {
+		DBLogError("读取上次IP失败: %v", err)
 		return
 	}
 
-	// 检查上次记录是否为空（也是首次有效记录）
-	isFirstRecord := len(config.LastAllIPs.PublicIPv4) == 0 &&
-		len(config.LastAllIPs.PublicIPv6) == 0 &&
-		len(config.LastAllIPs.PrivateIPv4) == 0 &&
-		len(config.LastAllIPs.PrivateIPv6) == 0
+	// 打印历史IP
+	if len(lastIPs) > 0 {
+		DBLogInfo("历史IP地址:")
+		if ips, ok := lastIPs["public_ipv4"]; ok && len(ips) > 0 {
+			DBLogInfo("  公网IPv4: %v", ips)
+		}
+		if ips, ok := lastIPs["public_ipv6"]; ok && len(ips) > 0 {
+			DBLogInfo("  公网IPv6: %v", ips)
+		}
+		if ips, ok := lastIPs["private_ipv4"]; ok && len(ips) > 0 {
+			DBLogInfo("  私网IPv4: %v", ips)
+		}
+		if ips, ok := lastIPs["private_ipv6"]; ok && len(ips) > 0 {
+			DBLogInfo("  私网IPv6: %v", ips)
+		}
+	}
 
-	if isFirstRecord {
-		DBLogInfo("首次记录IP地址（不发送通知）")
-		config.LastAllIPs = &currentIPs
-		config.LastPublicIPv4 = ipv4
-		config.LastPublicIPv6 = ipv6
-		saveConfig()
+	// 打印当前IP
+	DBLogInfo("当前IP地址:")
+	if len(currentIPs.PublicIPv4) > 0 {
+		DBLogInfo("  公网IPv4: %v", currentIPs.PublicIPv4)
+	} else {
+		DBLogInfo("  公网IPv4: (未获取)")
+	}
+	if len(currentIPs.PublicIPv6) > 0 {
+		DBLogInfo("  公网IPv6: %v", currentIPs.PublicIPv6)
+	} else {
+		DBLogInfo("  公网IPv6: (未获取)")
+	}
+	if len(currentIPs.PrivateIPv4) > 0 {
+		DBLogInfo("  私网IPv4: %v", currentIPs.PrivateIPv4)
+	}
+	if len(currentIPs.PrivateIPv6) > 0 {
+		DBLogInfo("  私网IPv6: %v", currentIPs.PrivateIPv6)
+	}
+
+	// 构建上次的IPInfo（公网IP只包含监控的类型，私网IP总是读取）
+	oldIPs := IPInfo{}
+
+	// 根据监控类型从数据库读取公网IP
+	if shouldMonitor("public_ipv4") {
+		if ips, ok := lastIPs["public_ipv4"]; ok && len(ips) > 0 {
+			oldIPs.PublicIPv4 = ips
+		}
+	}
+	if shouldMonitor("public_ipv6") {
+		if ips, ok := lastIPs["public_ipv6"]; ok && len(ips) > 0 {
+			oldIPs.PublicIPv6 = ips
+		}
+	}
+
+	// 私网IP总是从数据库读取（不管监控配置如何，因为邮件中需要显示）
+	if ips, ok := lastIPs["private_ipv4"]; ok && len(ips) > 0 {
+		oldIPs.PrivateIPv4 = ips
+	}
+	if ips, ok := lastIPs["private_ipv6"]; ok && len(ips) > 0 {
+		oldIPs.PrivateIPv6 = ips
+	}
+
+	// 检查是否首次运行（数据库中没有任何上次IP记录）
+	// 注意：这里只检查公网IP，因为私网IP可能在首次运行时就有
+	isFirstRun := len(lastIPs) == 0 ||
+		(len(oldIPs.PublicIPv4) == 0 && len(oldIPs.PublicIPv6) == 0)
+
+	if isFirstRun {
+		DBLogInfo("首次运行，记录当前IP地址到数据库（不发送通知）")
+
+		// 保存当前IP到数据库
+		// 首次运行时总是保存所有IP(公网+私网),不管监控配置如何
+		// 这样邮件中可以显示完整的IP信息
+		if len(currentIPs.PublicIPv4) > 0 {
+			SaveLastIPs("public_ipv4", currentIPs.PublicIPv4)
+		}
+		if len(currentIPs.PublicIPv6) > 0 {
+			SaveLastIPs("public_ipv6", currentIPs.PublicIPv6)
+		}
+		if len(currentIPs.PrivateIPv4) > 0 {
+			SaveLastIPs("private_ipv4", currentIPs.PrivateIPv4)
+		}
+		if len(currentIPs.PrivateIPv6) > 0 {
+			SaveLastIPs("private_ipv6", currentIPs.PrivateIPv6)
+		}
+
 		return
 	}
 
 	// 处理断网情况
 	if !networkOK {
 		DBLogWarn("网络断开，IP地址设为占位符，等待网络恢复")
-		// 断网时记录占位符IP，但不发送邮件
-		// 这样网络恢复后第一时间能检测到变化并发送通知
-		currentIPs.PublicIPv4 = []string{DisconnectedIPv4}
-		currentIPs.PublicIPv6 = []string{DisconnectedIPv6}
-		config.LastAllIPs = &currentIPs
-		config.LastPublicIPv4 = DisconnectedIPv4
-		config.LastPublicIPv6 = DisconnectedIPv6
-		saveConfig()
+
+		// 断网时保存占位符IP（仅保存监控的类型）
+		if shouldMonitor("public_ipv4") {
+			SaveLastIPs("public_ipv4", []string{DisconnectedIPv4})
+		}
+		if shouldMonitor("public_ipv6") {
+			SaveLastIPs("public_ipv6", []string{DisconnectedIPv6})
+		}
+
 		return
 	}
 
-	// 处理一个有值一个为空的情况
-	oldIPv4 := config.LastPublicIPv4
-	oldIPv6 := config.LastPublicIPv6
-	
-	// 检查是否只有一个IP获取失败
-	ipv4Failed := ipv4 == "" && oldIPv4 != "" && oldIPv4 != DisconnectedIPv4
-	ipv6Failed := ipv6 == "" && oldIPv6 != "" && oldIPv6 != DisconnectedIPv6
-	
-	if (ipv4Failed && ipv6 != "") || (ipv6Failed && ipv4 != "") {
-		// 一个有值一个为空，检查网络连通性
-		netOK, _ := CheckNetworkConnectivity()
-		if netOK {
-			// 网络正常但获取失败，可能是服务问题，发送警告邮件
-			var warningType string
-			if ipv4Failed {
-				warningType = "IPv4"
-				DBLogWarn("IPv4获取失败但网络正常，之前IP: %s，可能需要更换IP获取服务", oldIPv4)
-			} else {
-				warningType = "IPv6"
-				DBLogWarn("IPv6获取失败但网络正常，之前IP: %s，可能需要更换IP获取服务", oldIPv6)
-			}
-			
-			// 发送警告邮件
-			if config.SenderEmail != "" && len(config.Recipients) > 0 {
-				sendIPFetchWarningEmail(warningType, oldIPv4, oldIPv6, ipv4, ipv6)
+	// 比较IP变化（根据监控类型）
+	changes := compareAllIPs(&oldIPs, &currentIPs)
+
+	// 处理公网IPv4/IPv6获取失败的情况（仅检查监控的类型）
+	if shouldMonitor("public_ipv4") && shouldMonitor("public_ipv6") {
+		oldIPv4 := ""
+		oldIPv6 := ""
+		if ips, ok := lastIPs["public_ipv4"]; ok && len(ips) > 0 {
+			oldIPv4 = ips[0]
+		}
+		if ips, ok := lastIPs["public_ipv6"]; ok && len(ips) > 0 {
+			oldIPv6 = ips[0]
+		}
+
+		ipv4Failed := ipv4 == "" && oldIPv4 != "" && oldIPv4 != DisconnectedIPv4
+		ipv6Failed := ipv6 == "" && oldIPv6 != "" && oldIPv6 != DisconnectedIPv6
+
+		if (ipv4Failed && ipv6 != "") || (ipv6Failed && ipv4 != "") {
+			// 一个有值一个为空，检查网络连通性
+			netOK, _ := CheckNetworkConnectivity()
+			if netOK {
+				// 网络正常但获取失败，可能是服务问题，发送警告邮件
+				var warningType string
+				if ipv4Failed {
+					warningType = "IPv4"
+					DBLogWarn("IPv4获取失败但网络正常，之前IP: %s，可能需要更换IP获取服务", oldIPv4)
+				} else {
+					warningType = "IPv6"
+					DBLogWarn("IPv6获取失败但网络正常，之前IP: %s，可能需要更换IP获取服务", oldIPv6)
+				}
+
+				// 发送警告邮件
+				emailCfg, _ := GetEmailConfig()
+				if emailCfg.SenderEmail == "" || emailCfg.SenderPassword == "" || len(emailCfg.Recipients) == 0 {
+					DBLogWarn("邮件配置不完整，无法发送警告邮件（发件人、密码或收件人为空）")
+				} else {
+					err := sendIPFetchWarningEmail(warningType, oldIPv4, oldIPv6, ipv4, ipv6)
+					if err != nil {
+						DBLogError("发送警告邮件失败: %v", err)
+					} else {
+						DBLogInfo("警告邮件发送成功，收件人: %v", emailCfg.Recipients)
+					}
+				}
 			}
 		}
 	}
 
-	// 检查是否有变化
-	changed, issues := ValidateAndCompareIPs(oldIPv4, oldIPv6, ipv4, ipv6)
-	
-	// 同时检查私网IP变化
-	changes := compareAllIPs(config.LastAllIPs, &currentIPs)
-	
-	if changed || len(changes) > 0 {
+	// 如果有变化，发送通知并更新数据库
+	if len(changes) > 0 {
 		// 记录详细的IP变化
-		for _, issue := range issues {
-			DBLogInfo("IP变化: %s", issue)
-		}
 		for _, change := range changes {
 			if len(change.Added) > 0 {
 				DBLogInfo("IP变化 [%s] 新增: %v", change.Type, change.Added)
@@ -332,22 +384,35 @@ func checkAndNotifyIPChange() {
 		}
 
 		// 发送通知邮件
-		if config.SenderEmail != "" && len(config.Recipients) > 0 {
-			err := sendAllIPChangeNotification(config.LastAllIPs, &currentIPs, changes)
+		emailCfg, _ := GetEmailConfig()
+		if emailCfg.SenderEmail == "" || emailCfg.SenderPassword == "" || len(emailCfg.Recipients) == 0 {
+			DBLogWarn("邮件配置不完整，无法发送IP变化通知（发件人、密码或收件人为空）")
+		} else {
+			err := sendAllIPChangeNotification(&oldIPs, &currentIPs, changes)
 			if err != nil {
 				DBLogError("发送邮件失败: %v", err)
 			} else {
-				DBLogInfo("邮件通知发送成功，收件人: %v", config.Recipients)
+				DBLogInfo("邮件通知发送成功，收件人: %v", emailCfg.Recipients)
 			}
 		}
-
-		// 更新保存的IP
-		config.LastAllIPs = &currentIPs
-		config.LastPublicIPv4 = ipv4
-		config.LastPublicIPv6 = ipv6
-		saveConfig()
 	} else {
-		DBLogInfo("所有IP地址无变化")
+		DBLogInfo("所有监控的IP地址无变化")
+	}
+
+	// 无论是否有变化，都更新数据库中的最后IP（仅保存监控的类型）
+	if networkOK {
+		if shouldMonitor("public_ipv4") && len(currentIPs.PublicIPv4) > 0 {
+			SaveLastIPs("public_ipv4", currentIPs.PublicIPv4)
+		}
+		if shouldMonitor("public_ipv6") && len(currentIPs.PublicIPv6) > 0 {
+			SaveLastIPs("public_ipv6", currentIPs.PublicIPv6)
+		}
+		if shouldMonitor("private_ipv4") && len(currentIPs.PrivateIPv4) > 0 {
+			SaveLastIPs("private_ipv4", currentIPs.PrivateIPv4)
+		}
+		if shouldMonitor("private_ipv6") && len(currentIPs.PrivateIPv6) > 0 {
+			SaveLastIPs("private_ipv6", currentIPs.PrivateIPv6)
+		}
 	}
 }
 
@@ -379,7 +444,13 @@ type IPChange struct {
 
 // 检查是否监控某种IP类型
 func shouldMonitor(ipType string) bool {
-	for _, t := range config.MonitorTypes {
+	monitorCfg, err := GetMonitorConfig()
+	if err != nil {
+		DBLogError("读取监控配置失败: %v", err)
+		return false
+	}
+
+	for _, t := range monitorCfg.MonitorTypes {
 		if t == ipType {
 			return true
 		}
@@ -387,38 +458,56 @@ func shouldMonitor(ipType string) bool {
 	return false
 }
 
-// 比较所有IP，返回变化列表（根据监控类型过滤）
+// 获取当前邮件配置(辅助函数,避免重复代码)
+func getCurrentEmailConfig() *EmailConfig {
+	cfg, err := GetEmailConfig()
+	if err != nil {
+		return &EmailConfig{}
+	}
+	return cfg
+}
+
+// 获取当前监控配置(辅助函数,避免重复代码)
+func getCurrentMonitorConfig() *MonitorConfig {
+	cfg, err := GetMonitorConfig()
+	if err != nil {
+		return &MonitorConfig{
+			IntervalMinutes:   30,
+			MonitorTypes:      []string{"public_ipv4", "public_ipv6", "private_ipv4", "private_ipv6"},
+			LogRetentionHours: 72,
+		}
+	}
+	return cfg
+}
+
+// 比较所有IP，返回变化列表（公网IP根据监控类型过滤，私网IP总是比较）
 func compareAllIPs(oldIPs, newIPs *IPInfo) []IPChange {
 	var changes []IPChange
-	
-	// 比较公网IPv4
+
+	// 比较公网IPv4（根据监控配置）
 	if shouldMonitor("public_ipv4") {
 		if added, removed := compareIPList(oldIPs.PublicIPv4, newIPs.PublicIPv4); len(added) > 0 || len(removed) > 0 {
 			changes = append(changes, IPChange{Type: "公网IPv4", Added: added, Removed: removed})
 		}
 	}
-	
-	// 比较公网IPv6
+
+	// 比较公网IPv6（根据监控配置）
 	if shouldMonitor("public_ipv6") {
 		if added, removed := compareIPList(oldIPs.PublicIPv6, newIPs.PublicIPv6); len(added) > 0 || len(removed) > 0 {
 			changes = append(changes, IPChange{Type: "公网IPv6", Added: added, Removed: removed})
 		}
 	}
-	
-	// 比较私网IPv4
-	if shouldMonitor("private_ipv4") {
-		if added, removed := compareIPList(oldIPs.PrivateIPv4, newIPs.PrivateIPv4); len(added) > 0 || len(removed) > 0 {
-			changes = append(changes, IPChange{Type: "私网IPv4", Added: added, Removed: removed})
-		}
+
+	// 比较私网IPv4（总是比较，不管监控配置）
+	if added, removed := compareIPList(oldIPs.PrivateIPv4, newIPs.PrivateIPv4); len(added) > 0 || len(removed) > 0 {
+		changes = append(changes, IPChange{Type: "私网IPv4", Added: added, Removed: removed})
 	}
-	
-	// 比较私网IPv6
-	if shouldMonitor("private_ipv6") {
-		if added, removed := compareIPList(oldIPs.PrivateIPv6, newIPs.PrivateIPv6); len(added) > 0 || len(removed) > 0 {
-			changes = append(changes, IPChange{Type: "私网IPv6", Added: added, Removed: removed})
-		}
+
+	// 比较私网IPv6（总是比较，不管监控配置）
+	if added, removed := compareIPList(oldIPs.PrivateIPv6, newIPs.PrivateIPv6); len(added) > 0 || len(removed) > 0 {
+		changes = append(changes, IPChange{Type: "私网IPv6", Added: added, Removed: removed})
 	}
-	
+
 	return changes
 }
 
@@ -485,6 +574,10 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 从数据库读取配置
+	emailCfg, _ := GetEmailConfig()
+	monitorCfg, _ := GetMonitorConfig()
+
 	// 不返回密码
 	safeConfig := struct {
 		SenderEmail     string   `json:"sender_email"`
@@ -494,19 +587,19 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		AutoMode        bool     `json:"auto_mode"`
 		IntervalMinutes int      `json:"interval_minutes"`
 	}{
-		SenderEmail:     config.SenderEmail,
-		SMTPServer:      config.SMTPServer,
-		SMTPPort:        config.SMTPPort,
-		Recipients:      config.Recipients,
-		AutoMode:        config.AutoMode,
-		IntervalMinutes: config.IntervalMinutes,
+		SenderEmail:     emailCfg.SenderEmail,
+		SMTPServer:      emailCfg.SMTPServer,
+		SMTPPort:        emailCfg.SMTPPort,
+		Recipients:      emailCfg.Recipients,
+		AutoMode:        monitorCfg.AutoMode,
+		IntervalMinutes: monitorCfg.IntervalMinutes,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(safeConfig)
 }
 
-// 保存邮件配置（独立模块）
+// 保存邮件配置(独立模块)
 func handleSaveEmailConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "方法不允许", http.StatusMethodNotAllowed)
@@ -526,37 +619,41 @@ func handleSaveEmailConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 只更新邮件相关配置
+	// 获取当前配置
+	currentCfg, _ := GetEmailConfig()
+
+	// 只更新非空字段
 	if emailConfig.SenderEmail != "" {
-		config.SenderEmail = emailConfig.SenderEmail
+		currentCfg.SenderEmail = emailConfig.SenderEmail
 	}
 	if emailConfig.SenderPassword != "" {
-		config.SenderPassword = emailConfig.SenderPassword
+		currentCfg.SenderPassword = emailConfig.SenderPassword
 	}
 	if emailConfig.SMTPServer != "" {
-		config.SMTPServer = emailConfig.SMTPServer
+		currentCfg.SMTPServer = emailConfig.SMTPServer
 	}
 	if emailConfig.SMTPPort > 0 {
-		config.SMTPPort = emailConfig.SMTPPort
+		currentCfg.SMTPPort = emailConfig.SMTPPort
 	}
 	if emailConfig.Recipients != nil {
-		config.Recipients = emailConfig.Recipients
+		currentCfg.Recipients = emailConfig.Recipients
 	}
 
-	if err := saveConfig(); err != nil {
+	// 保存到数据库
+	if err := SaveEmailConfig(currentCfg); err != nil {
 		DBLogError("保存邮件配置失败: %v", err)
 		http.Error(w, "保存配置失败", http.StatusInternalServerError)
 		return
 	}
 
-	DBLogInfo("用户保存邮件配置成功: 发件人=%s, SMTP=%s:%d, 收件人=%v", 
-		config.SenderEmail, config.SMTPServer, config.SMTPPort, config.Recipients)
+	DBLogInfo("用户保存邮件配置成功: 发件人=%s, SMTP=%s:%d, 收件人=%v",
+		currentCfg.SenderEmail, currentCfg.SMTPServer, currentCfg.SMTPPort, currentCfg.Recipients)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
 
-// 保存监控配置（独立模块）
+// 保存监控配置(独立模块)
 func handleSaveMonitorConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "方法不允许", http.StatusMethodNotAllowed)
@@ -574,30 +671,34 @@ func handleSaveMonitorConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 检查是否需要重启监控
-	needRestart := config.AutoMode != monitorConfig.AutoMode || 
-		config.IntervalMinutes != monitorConfig.IntervalMinutes
+	// 获取当前配置
+	currentCfg, _ := GetMonitorConfig()
 
-	// 只更新监控相关配置
-	config.AutoMode = monitorConfig.AutoMode
+	// 检查是否需要重启监控
+	needRestart := currentCfg.AutoMode != monitorConfig.AutoMode ||
+		currentCfg.IntervalMinutes != monitorConfig.IntervalMinutes
+
+	// 更新配置
+	currentCfg.AutoMode = monitorConfig.AutoMode
 	if monitorConfig.IntervalMinutes > 0 {
-		config.IntervalMinutes = monitorConfig.IntervalMinutes
+		currentCfg.IntervalMinutes = monitorConfig.IntervalMinutes
 	}
 	if monitorConfig.MonitorTypes != nil {
-		config.MonitorTypes = monitorConfig.MonitorTypes
+		currentCfg.MonitorTypes = monitorConfig.MonitorTypes
 	}
 
-	if err := saveConfig(); err != nil {
+	// 保存到数据库
+	if err := SaveMonitorConfig(currentCfg); err != nil {
 		DBLogError("保存监控配置失败: %v", err)
 		http.Error(w, "保存配置失败", http.StatusInternalServerError)
 		return
 	}
 
 	modeStr := "手动"
-	if config.AutoMode {
-		modeStr = fmt.Sprintf("自动(每%d分钟)", config.IntervalMinutes)
+	if currentCfg.AutoMode {
+		modeStr = fmt.Sprintf("自动(每%d分钟)", currentCfg.IntervalMinutes)
 	}
-	DBLogInfo("用户保存监控配置成功: 模式=%s, 监控类型=%v", modeStr, config.MonitorTypes)
+	DBLogInfo("用户保存监控配置成功: 模式=%s, 监控类型=%v", modeStr, currentCfg.MonitorTypes)
 
 	// 如果监控配置变化，重启监控
 	if needRestart {
@@ -626,12 +727,13 @@ func handleTestEmail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if config.SenderEmail == "" || len(config.Recipients) == 0 {
+	emailCfg := getCurrentEmailConfig()
+	if emailCfg.SenderEmail == "" || len(emailCfg.Recipients) == 0 {
 		http.Error(w, "请先配置发件人和收件人", http.StatusBadRequest)
 		return
 	}
 
-	DBLogInfo("用户发送测试邮件到: %v", config.Recipients)
+	DBLogInfo("用户发送测试邮件到: %v", emailCfg.Recipients)
 
 	err := sendTestEmail()
 	if err != nil {
@@ -654,10 +756,6 @@ func handleCheckIP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	DBLogInfo("用户手动触发IP检查")
-	log.Println("手动触发IP检查...")
-
-	// 重新加载配置文件，确保使用最新的配置
-	loadConfig()
 
 	// 使用新的IP获取逻辑
 	ipv4, ipv6, networkOK := GetAllPublicIPs()
@@ -677,43 +775,41 @@ func handleCheckIP(w http.ResponseWriter, r *http.Request) {
 		currentIPs.PublicIPv6 = []string{ipv6}
 	}
 
-	// 检查是否是首次记录
-	isFirstRecord := config.LastAllIPs == nil ||
-		(len(config.LastAllIPs.PublicIPv4) == 0 &&
-			len(config.LastAllIPs.PublicIPv6) == 0 &&
-			len(config.LastAllIPs.PrivateIPv4) == 0 &&
-			len(config.LastAllIPs.PrivateIPv6) == 0)
-
-	if isFirstRecord {
-		// 首次记录，保存当前IP，不发送通知
-		config.LastAllIPs = &currentIPs
-		config.LastPublicIPv4 = ipv4
-		config.LastPublicIPv6 = ipv6
-		saveConfig()
-
-		result := struct {
-			Changed    bool       `json:"changed"`
-			Changes    []IPChange `json:"changes"`
-			CurrentIPs *IPInfo    `json:"current_ips"`
-			EmailSent  bool       `json:"email_sent"`
-			Message    string     `json:"message"`
-			NetworkOK  bool       `json:"network_ok"`
-		}{
-			Changed:    false,
-			Changes:    []IPChange{},
-			CurrentIPs: &currentIPs,
-			EmailSent:  false,
-			Message:    "首次记录IP地址完成，后续变化将会通知",
-			NetworkOK:  networkOK,
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(result)
+	// 从数据库读取上次的IP
+	lastIPs, err := GetAllLastIPs()
+	if err != nil {
+		DBLogError("读取上次IP失败: %v", err)
+		http.Error(w, fmt.Sprintf("读取上次IP失败: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	changes := compareAllIPs(config.LastAllIPs, &currentIPs)
-	changed := len(changes) > 0
+	// 构建上次的IPInfo（公网IP只包含监控的类型，私网IP总是读取）
+	oldIPs := IPInfo{}
+
+	// 根据监控类型从数据库读取公网IP
+	if shouldMonitor("public_ipv4") {
+		if ips, ok := lastIPs["public_ipv4"]; ok && len(ips) > 0 {
+			oldIPs.PublicIPv4 = ips
+		}
+	}
+	if shouldMonitor("public_ipv6") {
+		if ips, ok := lastIPs["public_ipv6"]; ok && len(ips) > 0 {
+			oldIPs.PublicIPv6 = ips
+		}
+	}
+
+	// 私网IP总是从数据库读取（不管监控配置如何，因为邮件中需要显示）
+	if ips, ok := lastIPs["private_ipv4"]; ok && len(ips) > 0 {
+		oldIPs.PrivateIPv4 = ips
+	}
+	if ips, ok := lastIPs["private_ipv6"]; ok && len(ips) > 0 {
+		oldIPs.PrivateIPv6 = ips
+	}
+
+	// 检查是否首次运行
+	// 注意：这里只检查公网IP，因为私网IP可能在首次运行时就有
+	isFirstRun := len(lastIPs) == 0 ||
+		(len(oldIPs.PublicIPv4) == 0 && len(oldIPs.PublicIPv6) == 0)
 
 	result := struct {
 		Changed    bool       `json:"changed"`
@@ -723,35 +819,78 @@ func handleCheckIP(w http.ResponseWriter, r *http.Request) {
 		Message    string     `json:"message"`
 		NetworkOK  bool       `json:"network_ok"`
 	}{
-		Changed:    changed,
-		Changes:    changes,
+		Changed:    false,
+		Changes:    []IPChange{},
 		CurrentIPs: &currentIPs,
 		EmailSent:  false,
-		Message:    "所有IP地址无变化",
+		Message:    "所有监控的IP地址无变化",
 		NetworkOK:  networkOK,
+	}
+
+	if isFirstRun {
+		result.Message = "首次记录IP地址完成，后续变化将会通知"
+
+		// 保存当前IP到数据库
+		// 首次运行时总是保存所有IP(公网+私网),不管监控配置如何
+		if networkOK {
+			if len(currentIPs.PublicIPv4) > 0 {
+				SaveLastIPs("public_ipv4", currentIPs.PublicIPv4)
+			}
+			if len(currentIPs.PublicIPv6) > 0 {
+				SaveLastIPs("public_ipv6", currentIPs.PublicIPv6)
+			}
+			if len(currentIPs.PrivateIPv4) > 0 {
+				SaveLastIPs("private_ipv4", currentIPs.PrivateIPv4)
+			}
+			if len(currentIPs.PrivateIPv6) > 0 {
+				SaveLastIPs("private_ipv6", currentIPs.PrivateIPv6)
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(result)
+		return
 	}
 
 	if !networkOK {
 		result.Message = "网络断开，无法获取公网IP"
-	} else if changed {
-		result.Message = "检测到IP地址变化"
+	} else {
+		// 比较IP变化
+		changes := compareAllIPs(&oldIPs, &currentIPs)
+		changed := len(changes) > 0
 
-		// 发送通知邮件
-		if config.SenderEmail != "" && len(config.Recipients) > 0 {
-			err := sendAllIPChangeNotification(config.LastAllIPs, &currentIPs, changes)
-			if err != nil {
-				result.Message = fmt.Sprintf("IP变化已检测，但邮件发送失败: %v", err)
-			} else {
-				result.EmailSent = true
-				result.Message = "IP变化已检测，邮件通知已发送"
+		result.Changes = changes
+		result.Changed = changed
+
+		if changed {
+			result.Message = "检测到IP地址变化"
+
+			// 发送通知邮件
+			emailCfg := getCurrentEmailConfig()
+			if emailCfg.SenderEmail != "" && len(emailCfg.Recipients) > 0 {
+				err := sendAllIPChangeNotification(&oldIPs, &currentIPs, changes)
+				if err != nil {
+					result.Message = fmt.Sprintf("IP变化已检测，但邮件发送失败: %v", err)
+				} else {
+					result.EmailSent = true
+					result.Message = "IP变化已检测，邮件通知已发送"
+				}
+			}
+
+			// 更新数据库中的最后IP（仅保存监控的类型）
+			if shouldMonitor("public_ipv4") && len(currentIPs.PublicIPv4) > 0 {
+				SaveLastIPs("public_ipv4", currentIPs.PublicIPv4)
+			}
+			if shouldMonitor("public_ipv6") && len(currentIPs.PublicIPv6) > 0 {
+				SaveLastIPs("public_ipv6", currentIPs.PublicIPv6)
+			}
+			if shouldMonitor("private_ipv4") && len(currentIPs.PrivateIPv4) > 0 {
+				SaveLastIPs("private_ipv4", currentIPs.PrivateIPv4)
+			}
+			if shouldMonitor("private_ipv6") && len(currentIPs.PrivateIPv6) > 0 {
+				SaveLastIPs("private_ipv6", currentIPs.PrivateIPv6)
 			}
 		}
-
-		// 更新保存的IP
-		config.LastAllIPs = &currentIPs
-		config.LastPublicIPv4 = ipv4
-		config.LastPublicIPv6 = ipv6
-		saveConfig()
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -769,16 +908,17 @@ func handleMonitorStatus(w http.ResponseWriter, r *http.Request) {
 	running := monitorTicker != nil
 	monitorMu.Unlock()
 
+	monitorCfg, _ := GetMonitorConfig()
 	status := struct {
 		AutoMode        bool     `json:"auto_mode"`
 		Running         bool     `json:"running"`
 		IntervalMinutes int      `json:"interval_minutes"`
 		MonitorTypes    []string `json:"monitor_types"`
 	}{
-		AutoMode:        config.AutoMode,
+		AutoMode:        monitorCfg.AutoMode,
 		Running:         running,
-		IntervalMinutes: config.IntervalMinutes,
-		MonitorTypes:    config.MonitorTypes,
+		IntervalMinutes: monitorCfg.IntervalMinutes,
+		MonitorTypes:    monitorCfg.MonitorTypes,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -817,40 +957,16 @@ func handleAppLogs(w http.ResponseWriter, r *http.Request) {
 	handleLogs(w, r)
 }
 
-// 获取IP获取日志
-func handleFetchLogs(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "方法不允许", http.StatusMethodNotAllowed)
-		return
-	}
-
-	limitStr := r.URL.Query().Get("limit")
-	limit := 100
-	if limitStr != "" {
-		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
-			limit = l
-		}
-	}
-
-	logs, err := GetIPFetchLogs(limit)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("获取日志失败: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(logs)
-}
-
 // 日志配置
 func handleLogConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		// 获取日志配置
+		monitorCfg, _ := GetMonitorConfig()
 		result := struct {
 			RetentionHours int `json:"retention_hours"`
 		}{
-			RetentionHours: config.LogRetentionHours,
+			RetentionHours: monitorCfg.LogRetentionHours,
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(result)
@@ -873,8 +989,10 @@ func handleLogConfig(w http.ResponseWriter, r *http.Request) {
 			req.RetentionHours = 8760
 		}
 
-		config.LogRetentionHours = req.RetentionHours
-		saveConfig()
+		// 保存到数据库
+		monitorCfg, _ := GetMonitorConfig()
+		monitorCfg.LogRetentionHours = req.RetentionHours
+		SaveMonitorConfig(monitorCfg)
 
 		// 立即执行清理
 		CleanOldLogs(req.RetentionHours)
@@ -904,13 +1022,16 @@ func handleCleanLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		req.RetentionHours = config.LogRetentionHours
+		monitorCfg, _ := GetMonitorConfig()
+		req.RetentionHours = monitorCfg.LogRetentionHours
 	}
 
-	if req.RetentionHours < 1 {
-		req.RetentionHours = 1
+	// 允许删除所有日志（retentionHours = 0）
+	if req.RetentionHours < 0 {
+		req.RetentionHours = 0
 	}
 
+	// 记录删除前的操作
 	DBLogInfo("用户手动清理日志: 保留%d小时内的日志", req.RetentionHours)
 
 	deleted, err := CleanOldLogsWithCount(req.RetentionHours)
@@ -920,6 +1041,7 @@ func handleCleanLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 记录删除结果
 	DBLogInfo("手动清理日志成功，删除了 %d 条记录", deleted)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -1016,19 +1138,6 @@ func handleTestIPService(w http.ResponseWriter, r *http.Request) {
 	   } else {
 		   DBLogWarn("IP服务测试失败: [%s] %s -> %s", req.Type, req.URL, result.Error)
 	   }
-
-	   // 记录测试日志
-	   fetchLog := &IPFetchLog{
-		   ServiceID:  serviceID,
-		   ServiceURL: req.URL,
-		   IPType:     req.Type,
-		   Success:    result.Success,
-		   IP:         result.IP,
-		   StatusCode: result.StatusCode,
-		   Error:      result.Error,
-		   Duration:   result.Duration,
-	   }
-	   SaveIPFetchLog(fetchLog)
 
 	   // 更新服务统计（如果有ID）
 	   if serviceID > 0 {
@@ -1304,6 +1413,10 @@ func handleExport(w http.ResponseWriter, r *http.Request) {
 
 	DBLogInfo("用户开始导出配置")
 
+	// 从数据库读取配置
+	emailCfg, _ := GetEmailConfig()
+	monitorCfg, _ := GetMonitorConfig()
+
 	// 构建导出数据
 	exportData := ExportData{
 		Version:    "2.0",
@@ -1313,9 +1426,9 @@ func handleExport(w http.ResponseWriter, r *http.Request) {
 	// 邮件配置
 	encryptedPassword := ""
 	passwordEncrypted := false
-	if config.SenderPassword != "" {
+	if emailCfg.SenderPassword != "" {
 		var err error
-		encryptedPassword, err = encrypt(config.SenderPassword, req.EncryptKey)
+		encryptedPassword, err = encrypt(emailCfg.SenderPassword, req.EncryptKey)
 		if err != nil {
 			DBLogError("导出配置失败 - 加密密码失败: %v", err)
 			http.Error(w, fmt.Sprintf("加密密码失败: %v", err), http.StatusInternalServerError)
@@ -1325,20 +1438,20 @@ func handleExport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	exportData.EmailConfig = EmailExport{
-		SenderEmail:       config.SenderEmail,
+		SenderEmail:       emailCfg.SenderEmail,
 		SenderPassword:    encryptedPassword,
-		SMTPServer:        config.SMTPServer,
-		SMTPPort:          config.SMTPPort,
-		Recipients:        config.Recipients,
+		SMTPServer:        emailCfg.SMTPServer,
+		SMTPPort:          emailCfg.SMTPPort,
+		Recipients:        emailCfg.Recipients,
 		PasswordEncrypted: passwordEncrypted,
 	}
 
 	// 监控配置
 	exportData.MonitorConfig = MonitorExport{
-		AutoMode:          config.AutoMode,
-		IntervalMinutes:   config.IntervalMinutes,
-		MonitorTypes:      config.MonitorTypes,
-		LogRetentionHours: config.LogRetentionHours,
+		AutoMode:          monitorCfg.AutoMode,
+		IntervalMinutes:   monitorCfg.IntervalMinutes,
+		MonitorTypes:      monitorCfg.MonitorTypes,
+		LogRetentionHours: monitorCfg.LogRetentionHours,
 	}
 
 	// IP服务列表
@@ -1416,57 +1529,76 @@ func handleImport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.ImportMode == "overwrite" {
-		// 覆盖导入：整体替换 config
-		config = Config{
-			SenderEmail:       req.Data.EmailConfig.SenderEmail,
-			SenderPassword:    decryptedPassword,
-			SMTPServer:        req.Data.EmailConfig.SMTPServer,
-			SMTPPort:          req.Data.EmailConfig.SMTPPort,
-			Recipients:        req.Data.EmailConfig.Recipients,
-			LastPublicIPv4:    "",
-			LastPublicIPv6:    "",
-			LastAllIPs:        nil,
+		// 覆盖导入：整体替换配置
+		emailCfg := &EmailConfig{
+			SenderEmail:    req.Data.EmailConfig.SenderEmail,
+			SenderPassword: decryptedPassword,
+			SMTPServer:     req.Data.EmailConfig.SMTPServer,
+			SMTPPort:       req.Data.EmailConfig.SMTPPort,
+			Recipients:     req.Data.EmailConfig.Recipients,
+		}
+		monitorCfg := &MonitorConfig{
 			AutoMode:          req.Data.MonitorConfig.AutoMode,
 			IntervalMinutes:   req.Data.MonitorConfig.IntervalMinutes,
 			MonitorTypes:      req.Data.MonitorConfig.MonitorTypes,
 			LogRetentionHours: req.Data.MonitorConfig.LogRetentionHours,
 		}
+
+		// 保存到数据库
+		if err := SaveEmailConfig(emailCfg); err != nil {
+			DBLogError("导入配置失败 - 保存邮件配置失败: %v", err)
+			http.Error(w, fmt.Sprintf("保存邮件配置失败: %v", err), http.StatusInternalServerError)
+			return
+		}
+		if err := SaveMonitorConfig(monitorCfg); err != nil {
+			DBLogError("导入配置失败 - 保存监控配置失败: %v", err)
+			http.Error(w, fmt.Sprintf("保存监控配置失败: %v", err), http.StatusInternalServerError)
+			return
+		}
 	} else {
 		// 智能导入：只更新非空字段
+		emailCfg, _ := GetEmailConfig()
+		monitorCfg, _ := GetMonitorConfig()
+
 		if req.Data.EmailConfig.SenderEmail != "" {
-			config.SenderEmail = req.Data.EmailConfig.SenderEmail
+			emailCfg.SenderEmail = req.Data.EmailConfig.SenderEmail
 		}
 		if decryptedPassword != "" {
-			config.SenderPassword = decryptedPassword
+			emailCfg.SenderPassword = decryptedPassword
 		}
 		if req.Data.EmailConfig.SMTPServer != "" {
-			config.SMTPServer = req.Data.EmailConfig.SMTPServer
+			emailCfg.SMTPServer = req.Data.EmailConfig.SMTPServer
 		}
 		if req.Data.EmailConfig.SMTPPort > 0 {
-			config.SMTPPort = req.Data.EmailConfig.SMTPPort
+			emailCfg.SMTPPort = req.Data.EmailConfig.SMTPPort
 		}
 		if req.Data.EmailConfig.Recipients != nil {
-			config.Recipients = req.Data.EmailConfig.Recipients
+			emailCfg.Recipients = req.Data.EmailConfig.Recipients
 		}
 
 		// 更新监控配置
-		config.AutoMode = req.Data.MonitorConfig.AutoMode
+		monitorCfg.AutoMode = req.Data.MonitorConfig.AutoMode
 		if req.Data.MonitorConfig.IntervalMinutes > 0 {
-			config.IntervalMinutes = req.Data.MonitorConfig.IntervalMinutes
+			monitorCfg.IntervalMinutes = req.Data.MonitorConfig.IntervalMinutes
 		}
 		if req.Data.MonitorConfig.MonitorTypes != nil {
-			config.MonitorTypes = req.Data.MonitorConfig.MonitorTypes
+			monitorCfg.MonitorTypes = req.Data.MonitorConfig.MonitorTypes
 		}
 		if req.Data.MonitorConfig.LogRetentionHours > 0 {
-			config.LogRetentionHours = req.Data.MonitorConfig.LogRetentionHours
+			monitorCfg.LogRetentionHours = req.Data.MonitorConfig.LogRetentionHours
 		}
-	}
 
-	// 保存配置
-	if err := saveConfig(); err != nil {
-		DBLogError("导入配置失败 - 保存配置失败: %v", err)
-		http.Error(w, fmt.Sprintf("保存配置失败: %v", err), http.StatusInternalServerError)
-		return
+		// 保存到数据库
+		if err := SaveEmailConfig(emailCfg); err != nil {
+			DBLogError("导入配置失败 - 保存邮件配置失败: %v", err)
+			http.Error(w, fmt.Sprintf("保存邮件配置失败: %v", err), http.StatusInternalServerError)
+			return
+		}
+		if err := SaveMonitorConfig(monitorCfg); err != nil {
+			DBLogError("导入配置失败 - 保存监控配置失败: %v", err)
+			http.Error(w, fmt.Sprintf("保存监控配置失败: %v", err), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	// 导入IP服务

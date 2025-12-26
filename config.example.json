@@ -1,8 +1,0 @@
-{
-  "sender_email": "",
-  "sender_password": "",
-  "smtp_server": "smtp.gmail.com",
-  "smtp_port": 587,
-  "recipients": [],
-  "last_public_ips": []
-}

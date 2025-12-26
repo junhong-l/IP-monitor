@@ -588,39 +588,6 @@
             border-radius: 8px;
         }
 
-        .log-tabs {
-            display: flex;
-            gap: 0;
-            background: white;
-            border-radius: 6px;
-            overflow: hidden;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-        }
-
-        .log-tab {
-            padding: 8px 16px;
-            border: none;
-            background: white;
-            color: #666;
-            cursor: pointer;
-            font-size: 13px;
-            font-weight: 500;
-            transition: all 0.2s;
-        }
-
-        .log-tab:not(:last-child) {
-            border-right: 1px solid #eee;
-        }
-
-        .log-tab.active {
-            background: #667eea;
-            color: white;
-        }
-
-        .log-tab:hover:not(.active) {
-            background: #f5f5f5;
-        }
-
         .log-action-btn {
             padding: 8px 14px;
             border: none;
@@ -652,28 +619,10 @@
             margin-left: auto;
             font-size: 13px;
             color: #666;
-            background: white;
-            padding: 6px 12px;
-            border-radius: 6px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-        }
-
-        .log-config input {
-            width: 50px;
-            padding: 4px 6px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-size: 13px;
-            text-align: center;
-        }
-
-        .log-config input:focus {
-            outline: none;
-            border-color: #667eea;
         }
 
         .log-config-btn {
-            padding: 4px 10px;
+            padding: 6px 12px;
             border: none;
             border-radius: 4px;
             cursor: pointer;
@@ -682,12 +631,12 @@
             transition: all 0.2s;
         }
 
-        .log-config-btn.save {
+        .log-config-btn.settings {
             background: #667eea;
             color: white;
         }
 
-        .log-config-btn.save:hover {
+        .log-config-btn.settings:hover {
             background: #5a6fd6;
         }
 
@@ -920,6 +869,50 @@
         </div>
         <div id="confirmOverlay" class="confirm-overlay"></div>
 
+        <!-- 日志设置对话框 -->
+        <div id="logSettingsDialog" class="confirm-dialog" style="display: none;">
+            <div class="confirm-content" style="max-width: 400px;">
+                <div class="confirm-icon" style="font-size: 40px;">⚙️</div>
+                <h3 style="margin: 10px 0; color: #333;">日志保留设置</h3>
+                <p class="confirm-text" style="margin-bottom: 15px; font-size: 14px; color: #666;">
+                    设置日志自动清理周期。系统将每小时自动清理超过此时间的日志。
+                </p>
+                <div style="margin: 20px 0;">
+                    <label style="display: block; margin-bottom: 8px; color: #555; font-size: 14px;">
+                        保留最近 <input type="number" id="logRetentionInput" min="1" max="8760" value="72" style="width: 70px; padding: 6px; border: 1px solid #ddd; border-radius: 4px; text-align: center; font-size: 14px;"> 小时的日志
+                    </label>
+                    <small style="color: #888; font-size: 12px;">范围：1-8760小时（1小时-365天）</small>
+                </div>
+                <div class="confirm-buttons">
+                    <button class="confirm-btn confirm-cancel" onclick="closeLogSettings()">取消</button>
+                    <button class="confirm-btn confirm-ok" onclick="saveLogSettings()">保存</button>
+                </div>
+            </div>
+        </div>
+        <div id="logSettingsOverlay" class="confirm-overlay" style="display: none;"></div>
+
+        <!-- 清理日志对话框 -->
+        <div id="cleanLogsDialog" class="confirm-dialog" style="display: none;">
+            <div class="confirm-content" style="max-width: 400px;">
+                <div class="confirm-icon" style="font-size: 40px;">🗑️</div>
+                <h3 style="margin: 10px 0; color: #333;">清理日志</h3>
+                <p class="confirm-text" style="margin-bottom: 15px; font-size: 14px; color: #666;">
+                    删除指定时间之前的所有日志记录。
+                </p>
+                <div style="margin: 20px 0;">
+                    <label style="display: block; margin-bottom: 8px; color: #555; font-size: 14px;">
+                        清理 <input type="number" id="cleanHoursInput" min="0" max="8760" value="72" style="width: 70px; padding: 6px; border: 1px solid #ddd; border-radius: 4px; text-align: center; font-size: 14px;"> 小时前的日志
+                    </label>
+                    <small style="color: #888; font-size: 12px;">输入0表示删除所有日志</small>
+                </div>
+                <div class="confirm-buttons">
+                    <button class="confirm-btn confirm-cancel" onclick="closeCleanLogs()">取消</button>
+                    <button class="confirm-btn confirm-ok" onclick="confirmCleanLogs()">清理</button>
+                </div>
+            </div>
+        </div>
+        <div id="cleanLogsOverlay" class="confirm-overlay" style="display: none;"></div>
+
         <!-- 配置卡片 -->
         <div class="card">
             <h2>📧 邮件配置</h2>
@@ -1040,17 +1033,10 @@
         <div class="card">
             <h2>📋 系统日志</h2>
             <div class="log-controls">
-                <div class="log-tabs">
-                    <button class="log-tab active" id="tabAppLog" onclick="switchLogTab('app')">应用日志</button>
-                    <button class="log-tab" id="tabFetchLog" onclick="switchLogTab('fetch')">IP获取日志</button>
-                </div>
-                <button class="log-action-btn refresh" onclick="refreshCurrentLogs()">刷新</button>
+                <button class="log-action-btn refresh" onclick="refreshLogs()">刷新</button>
                 <div class="log-config">
-                    <span>清理</span>
-                    <input type="number" id="logRetentionHours" min="1" max="8760" value="72">
-                    <span>小时前</span>
-                    <button class="log-config-btn save" onclick="saveLogConfig()">保存</button>
-                    <button class="log-config-btn clean" onclick="cleanLogsNow()">清理</button>
+                    <button class="log-config-btn settings" onclick="openLogSettings()">⚙️ 日志设置</button>
+                    <button class="log-config-btn clean" onclick="openCleanLogsDialog()">🗑️ 清理日志</button>
                 </div>
             </div>
             <div id="logViewer" class="log-viewer">
@@ -1536,19 +1522,19 @@
         // 保存日志配置
         async function saveLogConfig() {
             const retentionHours = parseInt(document.getElementById('logRetentionHours').value);
-            
+
             if (retentionHours < 1 || retentionHours > 8760) {
                 showMessage('日志保留时间必须在1-8760小时之间', 'error');
                 return;
             }
-            
+
             try {
                 const response = await fetch('/api/logs/config', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ retention_hours: retentionHours })
                 });
-                
+
                 if (response.ok) {
                     showMessage('日志配置保存成功', 'success');
                 } else {
@@ -1559,47 +1545,100 @@
             }
         }
 
-        // 当前日志类型
-        let currentLogTab = 'app';
-
-        // 切换日志标签
-        function switchLogTab(tab) {
-            currentLogTab = tab;
-            document.getElementById('tabAppLog').classList.toggle('active', tab === 'app');
-            document.getElementById('tabFetchLog').classList.toggle('active', tab === 'fetch');
-            refreshCurrentLogs();
+        // ========== 日志设置对话框 ==========
+        function openLogSettings() {
+            // 获取当前配置并显示
+            fetch('/api/logs/config')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('logRetentionInput').value = data.retention_hours || 72;
+                    document.getElementById('logSettingsDialog').style.display = 'flex';
+                    document.getElementById('logSettingsOverlay').style.display = 'block';
+                })
+                .catch(error => {
+                    showMessage('获取日志配置失败: ' + error.message, 'error');
+                });
         }
 
-        // 刷新当前日志
-        function refreshCurrentLogs() {
-            if (currentLogTab === 'app') {
-                refreshLogs();
-            } else {
-                refreshFetchLogs();
+        function closeLogSettings() {
+            document.getElementById('logSettingsDialog').style.display = 'none';
+            document.getElementById('logSettingsOverlay').style.display = 'none';
+        }
+
+        async function saveLogSettings() {
+            const retentionHours = parseInt(document.getElementById('logRetentionInput').value);
+
+            if (retentionHours < 1 || retentionHours > 8760) {
+                showMessage('日志保留时间必须在1-8760小时之间', 'error');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/logs/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ retention_hours: retentionHours })
+                });
+
+                if (response.ok) {
+                    showMessage('日志保留设置已保存', 'success');
+                    closeLogSettings();
+                } else {
+                    showMessage('保存日志配置失败', 'error');
+                }
+            } catch (error) {
+                showMessage('保存日志配置时发生错误: ' + error.message, 'error');
             }
         }
 
-        // 立即清理日志
-        async function cleanLogsNow() {
-            const confirmed = await showConfirm('确定要立即清理过期日志吗？', {
-                icon: '🗑️',
-                okText: '清理',
-                type: 'danger'
-            });
-            if (!confirmed) return;
-            
-            const hours = document.getElementById('logRetentionHours').value || 72;
+        // ========== 清理日志对话框 ==========
+        function openCleanLogsDialog() {
+            // 获取当前配置作为默认值
+            fetch('/api/logs/config')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('cleanHoursInput').value = data.retention_hours || 72;
+                    document.getElementById('cleanLogsDialog').style.display = 'flex';
+                    document.getElementById('cleanLogsOverlay').style.display = 'block';
+                })
+                .catch(error => {
+                    // 如果获取失败，使用默认值
+                    document.getElementById('cleanHoursInput').value = 72;
+                    document.getElementById('cleanLogsDialog').style.display = 'flex';
+                    document.getElementById('cleanLogsOverlay').style.display = 'block';
+                });
+        }
+
+        function closeCleanLogs() {
+            document.getElementById('cleanLogsDialog').style.display = 'none';
+            document.getElementById('cleanLogsOverlay').style.display = 'none';
+        }
+
+        async function confirmCleanLogs() {
+            const hours = parseInt(document.getElementById('cleanHoursInput').value);
+
+            if (hours < 0 || hours > 8760) {
+                showMessage('清理时间必须在0-8760小时之间', 'error');
+                return;
+            }
+
+            closeCleanLogs();
+
             try {
                 const response = await fetch('/api/logs/clean', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ retention_hours: parseInt(hours) })
+                    body: JSON.stringify({ retention_hours: hours })
                 });
-                
+
                 if (response.ok) {
                     const result = await response.json();
-                    showMessage(`日志清理完成，删除了 ${result.deleted || 0} 条记录`, 'success');
-                    refreshCurrentLogs();
+                    if (hours === 0) {
+                        showMessage(`已删除所有日志（共 ${result.deleted || 0} 条记录）`, 'success');
+                    } else {
+                        showMessage(`日志清理完成，删除了 ${result.deleted || 0} 条记录`, 'success');
+                    }
+                    refreshLogs();
                 } else {
                     showMessage('清理失败', 'error');
                 }
@@ -1634,38 +1673,6 @@
                 
                 viewer.innerHTML = html;
                 viewer.scrollTop = viewer.scrollHeight;
-            } catch (error) {
-                viewer.innerHTML = '<div class="log-empty">加载日志失败: ' + escapeHtml(error.message) + '</div>';
-            }
-        }
-
-        // 刷新IP获取日志
-        async function refreshFetchLogs() {
-            const viewer = document.getElementById('logViewer');
-            viewer.innerHTML = '<div class="loading"><div class="spinner"></div><p>正在加载日志...</p></div>';
-            
-            try {
-                const response = await fetch('/api/logs/fetch?limit=200');
-                const entries = await response.json();
-                
-                if (!entries || entries.length === 0) {
-                    viewer.innerHTML = '<div class="log-empty">暂无IP获取日志</div>';
-                    return;
-                }
-                
-                let html = '';
-                entries.forEach(entry => {
-                    const levelClass = entry.success ? 'INFO' : 'ERROR';
-                    const status = entry.success ? '✅' : '❌';
-                    const ip = entry.ip || entry.error || '无';
-                    html += `<div class="log-entry ${levelClass}">`;
-                    html += `<span class="log-time">${escapeHtml(entry.created_at)}</span>`;
-                    html += `<span class="log-level ${levelClass}">[${entry.ip_type}]</span>`;
-                    html += `<span class="log-message">${status} ${escapeHtml(entry.service_url)} → ${escapeHtml(ip)} (${entry.duration_ms}ms)</span>`;
-                    html += '</div>';
-                });
-                
-                viewer.innerHTML = html;
             } catch (error) {
                 viewer.innerHTML = '<div class="log-empty">加载日志失败: ' + escapeHtml(error.message) + '</div>';
             }

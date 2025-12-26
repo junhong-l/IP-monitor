@@ -3,7 +3,6 @@ package main
 import (
 	"crypto/tls"
 	"fmt"
-	"log"
 	"net"
 	"net/smtp"
 	"strings"
@@ -136,10 +135,10 @@ func sendAllIPChangeNotification(oldIPs, newIPs *IPInfo, changes []IPChange) err
 	newPublicIPv6Style := "color: #fff;"
 	newPrivateIPv4Style := "color: #fff;"
 	newPrivateIPv6Style := "color: #fff;"
-	oldPublicIPv4Style := "color: #495057;"
-	oldPublicIPv6Style := "color: #495057;"
-	oldPrivateIPv4Style := "color: #495057;"
-	oldPrivateIPv6Style := "color: #495057;"
+	oldPublicIPv4Style := "color: #fff; font-weight: 500;"
+	oldPublicIPv6Style := "color: #fff; font-weight: 500;"
+	oldPrivateIPv4Style := "color: #fff; font-weight: 500;"
+	oldPrivateIPv6Style := "color: #fff; font-weight: 500;"
 	
 	if isTypeChanged(changes, "公网IPv4") {
 		newPublicIPv4Style = "color: #ffeb3b; font-weight: bold;"
@@ -187,23 +186,23 @@ func sendAllIPChangeNotification(oldIPs, newIPs *IPInfo, changes []IPChange) err
                             <table width="100%%" cellpadding="0" cellspacing="0">
                                 <tr>
                                     <td style="background: linear-gradient(135deg, #28a745 0%%, #20c997 100%%); padding: 20px; border-radius: 12px;">
-                                        <h3 style="color: #fff; margin: 0 0 15px 0; font-size: 16px;">✅ 当前IP地址（新）</h3>
-                                        <table width="100%%" cellpadding="8" cellspacing="0">
+                                        <h3 style="color: #fff; margin: 0 0 15px 0; font-size: 17px; font-weight: 600;">✅ 当前IP地址（新）</h3>
+                                        <table width="100%%" cellpadding="10" cellspacing="0">
                                             <tr>
-                                                <td style="color: rgba(255,255,255,0.8); font-size: 13px; width: 100px;">🌍 公网IPv4</td>
-                                                <td style="%s font-size: 14px; font-family: 'Courier New', monospace;">%s</td>
+                                                <td style="color: rgba(255,255,255,0.9); font-size: 14px; width: 110px; font-weight: 500;">🌍 公网IPv4</td>
+                                                <td style="%s font-size: 15px; font-family: 'Courier New', 'Consolas', monospace;">%s</td>
                                             </tr>
                                             <tr>
-                                                <td style="color: rgba(255,255,255,0.8); font-size: 13px;">🌐 公网IPv6</td>
-                                                <td style="%s font-size: 12px; font-family: 'Courier New', monospace; word-break: break-all;">%s</td>
+                                                <td style="color: rgba(255,255,255,0.9); font-size: 14px; font-weight: 500;">🌐 公网IPv6</td>
+                                                <td style="%s font-size: 13px; font-family: 'Courier New', 'Consolas', monospace; word-break: break-all;">%s</td>
                                             </tr>
                                             <tr>
-                                                <td style="color: rgba(255,255,255,0.8); font-size: 13px;">🏠 私网IPv4</td>
-                                                <td style="%s font-size: 14px; font-family: 'Courier New', monospace;">%s</td>
+                                                <td style="color: rgba(255,255,255,0.9); font-size: 14px; font-weight: 500;">🏠 私网IPv4</td>
+                                                <td style="%s font-size: 15px; font-family: 'Courier New', 'Consolas', monospace;">%s</td>
                                             </tr>
                                             <tr>
-                                                <td style="color: rgba(255,255,255,0.8); font-size: 13px;">🏠 私网IPv6</td>
-                                                <td style="%s font-size: 12px; font-family: 'Courier New', monospace; word-break: break-all;">%s</td>
+                                                <td style="color: rgba(255,255,255,0.9); font-size: 14px; font-weight: 500;">🏠 私网IPv6</td>
+                                                <td style="%s font-size: 13px; font-family: 'Courier New', 'Consolas', monospace; word-break: break-all;">%s</td>
                                             </tr>
                                         </table>
                                     </td>
@@ -217,24 +216,24 @@ func sendAllIPChangeNotification(oldIPs, newIPs *IPInfo, changes []IPChange) err
                         <td style="padding: 15px 30px 30px 30px;">
                             <table width="100%%" cellpadding="0" cellspacing="0">
                                 <tr>
-                                    <td style="background: #f8f9fa; padding: 20px; border-radius: 12px; border: 1px solid #e9ecef;">
-                                        <h3 style="color: #6c757d; margin: 0 0 15px 0; font-size: 16px;">📋 变更前IP地址（旧）</h3>
-                                        <table width="100%%" cellpadding="8" cellspacing="0">
+                                    <td style="background: linear-gradient(135deg, #dc3545 0%%, #c82333 100%%); padding: 20px; border-radius: 12px;">
+                                        <h3 style="color: #fff; margin: 0 0 15px 0; font-size: 17px; font-weight: 600;">📋 变更前IP地址（旧）</h3>
+                                        <table width="100%%" cellpadding="10" cellspacing="0">
                                             <tr>
-                                                <td style="color: #6c757d; font-size: 13px; width: 100px;">🌍 公网IPv4</td>
-                                                <td style="%s font-size: 14px; font-family: 'Courier New', monospace;">%s</td>
+                                                <td style="color: rgba(255,255,255,0.9); font-size: 14px; width: 110px; font-weight: 500;">🌍 公网IPv4</td>
+                                                <td style="%s font-size: 15px; font-family: 'Courier New', 'Consolas', monospace;">%s</td>
                                             </tr>
                                             <tr>
-                                                <td style="color: #6c757d; font-size: 13px;">🌐 公网IPv6</td>
-                                                <td style="%s font-size: 12px; font-family: 'Courier New', monospace; word-break: break-all;">%s</td>
+                                                <td style="color: rgba(255,255,255,0.9); font-size: 14px; font-weight: 500;">🌐 公网IPv6</td>
+                                                <td style="%s font-size: 13px; font-family: 'Courier New', 'Consolas', monospace; word-break: break-all;">%s</td>
                                             </tr>
                                             <tr>
-                                                <td style="color: #6c757d; font-size: 13px;">🏠 私网IPv4</td>
-                                                <td style="%s font-size: 14px; font-family: 'Courier New', monospace;">%s</td>
+                                                <td style="color: rgba(255,255,255,0.9); font-size: 14px; font-weight: 500;">🏠 私网IPv4</td>
+                                                <td style="%s font-size: 15px; font-family: 'Courier New', 'Consolas', monospace;">%s</td>
                                             </tr>
                                             <tr>
-                                                <td style="color: #6c757d; font-size: 13px;">🏠 私网IPv6</td>
-                                                <td style="%s font-size: 12px; font-family: 'Courier New', monospace; word-break: break-all;">%s</td>
+                                                <td style="color: rgba(255,255,255,0.9); font-size: 14px; font-weight: 500;">🏠 私网IPv6</td>
+                                                <td style="%s font-size: 13px; font-family: 'Courier New', 'Consolas', monospace; word-break: break-all;">%s</td>
                                             </tr>
                                         </table>
                                     </td>
@@ -277,12 +276,23 @@ func sendAllIPChangeNotification(oldIPs, newIPs *IPInfo, changes []IPChange) err
 	return sendEmail(subject, body)
 }
 
-// 获取IP列表字符串
+// 获取IP列表字符串（每个IP一行，带复制提示）
 func getIPListStr(ips []string) string {
 	if len(ips) == 0 {
-		return "无"
+		return "<span style=\"color: #ffffff; font-weight: bold; font-size: 15px;\">无</span>"
 	}
-	return strings.Join(ips, ", ")
+	var result []string
+	for _, ip := range ips {
+		result = append(result, fmt.Sprintf(
+			"<div style=\"margin: 6px 0; padding: 10px 12px; background: rgba(255,255,255,0.25); border-radius: 6px; font-family: 'Courier New', 'Consolas', monospace; font-size: 15px; font-weight: 600; line-height: 1.4;\">"+
+				"<span style=\"color: #ffffff;\">%s</span>"+
+				"<span style=\"float: right; opacity: 0.7; font-size: 12px; color: #ffffff;\">📋</span>"+
+				"<div style=\"clear: both;\"></div>"+
+			"</div>",
+			ip,
+		))
+	}
+	return strings.Join(result, "")
 }
 
 // 发送测试邮件
@@ -436,11 +446,22 @@ func sendTestEmail() error {
 
 // 发送邮件的通用函数
 func sendEmail(subject, body string) error {
-	from := config.SenderEmail
-	password := config.SenderPassword
-	smtpServer := config.SMTPServer
-	smtpPort := config.SMTPPort
-	to := config.Recipients
+	// 从数据库读取邮件配置
+	emailCfg, err := GetEmailConfig()
+	if err != nil {
+		return fmt.Errorf("读取邮件配置失败: %v", err)
+	}
+
+	from := emailCfg.SenderEmail
+	password := emailCfg.SenderPassword
+	smtpServer := emailCfg.SMTPServer
+	smtpPort := emailCfg.SMTPPort
+	to := emailCfg.Recipients
+
+	// 验证必要字段
+	if from == "" || password == "" || len(to) == 0 {
+		return fmt.Errorf("邮件配置不完整: 发件人或密码或收件人为空")
+	}
 
 	// 构建邮件头
 	header := make(map[string]string)
@@ -470,7 +491,7 @@ func sendEmail(subject, body string) error {
 
 // 使用TLS发送邮件（端口587，STARTTLS方式）
 func sendMailTLS(addr, from, password, smtpServer string, to []string, message []byte) error {
-	log.Printf("尝试TLS方式发送邮件到 %s", addr)
+	DBLogInfo("尝试TLS方式发送邮件到 %s", addr)
 	
 	// 先建立普通连接
 	conn, err := net.Dial("tcp", addr)
@@ -527,14 +548,14 @@ func sendMailTLS(addr, from, password, smtpServer string, to []string, message [
 		return fmt.Errorf("关闭写入器失败: %v", err)
 	}
 
-	log.Println("TLS邮件发送成功")
+	DBLogInfo("TLS邮件发送成功")
 	client.Quit()
 	return nil
 }
 
 // 使用SSL发送邮件（端口465）
 func sendMailSSL(addr, from, password, smtpServer string, to []string, message []byte) error {
-	log.Printf("尝试SSL方式发送邮件到 %s", addr)
+	DBLogInfo("尝试SSL方式发送邮件到 %s", addr)
 	
 	// 建立SSL连接
 	tlsConfig := &tls.Config{
@@ -587,7 +608,7 @@ func sendMailSSL(addr, from, password, smtpServer string, to []string, message [
 		return fmt.Errorf("关闭写入器失败: %v", err)
 	}
 
-	log.Println("SSL邮件发送成功")
+	DBLogInfo("SSL邮件发送成功")
 	// 邮件已成功发送，忽略Quit的错误
 	client.Quit()
 	return nil
@@ -618,12 +639,22 @@ func base64EncodeBytes(b []byte) string {
 	return string(result)
 }
 
-// 格式化IP列表用于显示
+// 格式化IP列表用于显示（每个IP一行，带背景样式）
 func formatIPList(ips []string) string {
 	if len(ips) == 0 {
-		return "无"
+		return "<span style=\"color: rgba(255,255,255,0.5);\">无</span>"
 	}
-	return strings.Join(ips, "<br>")
+	var result []string
+	for _, ip := range ips {
+		result = append(result, fmt.Sprintf(
+			"<div style=\"margin: 4px 0; padding: 6px 10px; background: rgba(255,255,255,0.15); border-radius: 4px; font-family: 'Courier New', monospace;\">"+
+				"%s"+
+				"<span style=\"float: right; opacity: 0.6; font-size: 11px; color: rgba(255,255,255,0.7);\">📋</span>"+
+			"</div>",
+			ip,
+		))
+	}
+	return strings.Join(result, "")
 }
 
 // 获取当前时间字符串
