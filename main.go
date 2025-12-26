@@ -1,10 +1,16 @@
 package main
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"crypto/sha256"
 	"embed"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
@@ -94,6 +100,9 @@ func main() {
 	http.HandleFunc("/api/ip-services/add", handleAddIPService)
 	http.HandleFunc("/api/ip-services/update", handleUpdateIPService)
 	http.HandleFunc("/api/ip-services/delete", handleDeleteIPService)
+	// 导入导出API
+	http.HandleFunc("/api/export", handleExport)
+	http.HandleFunc("/api/import", handleImport)
 
 	addr := fmt.Sprintf(":%d", *port)
 	DBLogInfo("服务器启动在端口 %d", *port)
@@ -1162,4 +1171,353 @@ func handleDeleteIPService(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+// ==================== 加密解密函数 ====================
+
+// deriveKey 从密码派生AES密钥（32字节，用于AES-256）
+func deriveKey(password string) []byte {
+	hash := sha256.Sum256([]byte(password))
+	return hash[:]
+}
+
+// encrypt 使用AES-GCM加密字符串
+func encrypt(plaintext, password string) (string, error) {
+	if plaintext == "" {
+		return "", nil
+	}
+
+	key := deriveKey(password)
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", err
+	}
+
+	ciphertext := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
+	return base64.StdEncoding.EncodeToString(ciphertext), nil
+}
+
+// decrypt 使用AES-GCM解密字符串
+func decrypt(ciphertext, password string) (string, error) {
+	if ciphertext == "" {
+		return "", nil
+	}
+
+	key := deriveKey(password)
+	data, err := base64.StdEncoding.DecodeString(ciphertext)
+	if err != nil {
+		return "", fmt.Errorf("base64解码失败: %v", err)
+	}
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+
+	if len(data) < gcm.NonceSize() {
+		return "", fmt.Errorf("密文太短")
+	}
+
+	nonce, ciphertextBytes := data[:gcm.NonceSize()], data[gcm.NonceSize():]
+	plaintext, err := gcm.Open(nil, nonce, ciphertextBytes, nil)
+	if err != nil {
+		return "", fmt.Errorf("解密失败，密钥可能不正确")
+	}
+
+	return string(plaintext), nil
+}
+
+// ==================== 导出导入数据结构 ====================
+
+// ExportData 导出数据结构
+type ExportData struct {
+	Version       string         `json:"version"`
+	ExportTime    string         `json:"export_time"`
+	EmailConfig   EmailExport    `json:"email_config"`
+	MonitorConfig MonitorExport  `json:"monitor_config"`
+	IPServices    []IPServiceExport `json:"ip_services"`
+}
+
+// EmailExport 邮件配置导出
+type EmailExport struct {
+	SenderEmail       string   `json:"sender_email"`
+	SenderPassword    string   `json:"sender_password"` // 加密后的密码
+	SMTPServer        string   `json:"smtp_server"`
+	SMTPPort          int      `json:"smtp_port"`
+	Recipients        []string `json:"recipients"`
+	PasswordEncrypted bool     `json:"password_encrypted"` // 标记密码是否已加密
+}
+
+// MonitorExport 监控配置导出
+type MonitorExport struct {
+	AutoMode          bool     `json:"auto_mode"`
+	IntervalMinutes   int      `json:"interval_minutes"`
+	MonitorTypes      []string `json:"monitor_types"`
+	LogRetentionHours int      `json:"log_retention_hours"`
+}
+
+// IPServiceExport IP服务导出
+type IPServiceExport struct {
+	Name     string `json:"name"`
+	URL      string `json:"url"`
+	Type     string `json:"type"`
+	Enabled  bool   `json:"enabled"`
+	Priority int    `json:"priority"`
+}
+
+// ==================== 导出处理 ====================
+
+func handleExport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "方法不允许", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		EncryptKey string `json:"encrypt_key"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "无效的请求数据", http.StatusBadRequest)
+		return
+	}
+
+	if req.EncryptKey == "" {
+		http.Error(w, "加密密钥不能为空", http.StatusBadRequest)
+		return
+	}
+
+	DBLogInfo("用户开始导出配置")
+
+	// 构建导出数据
+	exportData := ExportData{
+		Version:    "2.0",
+		ExportTime: time.Now().Format("2006-01-02 15:04:05"),
+	}
+
+	// 邮件配置
+	encryptedPassword := ""
+	passwordEncrypted := false
+	if config.SenderPassword != "" {
+		var err error
+		encryptedPassword, err = encrypt(config.SenderPassword, req.EncryptKey)
+		if err != nil {
+			DBLogError("导出配置失败 - 加密密码失败: %v", err)
+			http.Error(w, fmt.Sprintf("加密密码失败: %v", err), http.StatusInternalServerError)
+			return
+		}
+		passwordEncrypted = true
+	}
+
+	exportData.EmailConfig = EmailExport{
+		SenderEmail:       config.SenderEmail,
+		SenderPassword:    encryptedPassword,
+		SMTPServer:        config.SMTPServer,
+		SMTPPort:          config.SMTPPort,
+		Recipients:        config.Recipients,
+		PasswordEncrypted: passwordEncrypted,
+	}
+
+	// 监控配置
+	exportData.MonitorConfig = MonitorExport{
+		AutoMode:          config.AutoMode,
+		IntervalMinutes:   config.IntervalMinutes,
+		MonitorTypes:      config.MonitorTypes,
+		LogRetentionHours: config.LogRetentionHours,
+	}
+
+	// IP服务列表
+	services, err := GetIPServices("")
+	if err != nil {
+		DBLogError("导出配置失败 - 获取IP服务失败: %v", err)
+		http.Error(w, fmt.Sprintf("获取IP服务失败: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	for _, svc := range services {
+		exportData.IPServices = append(exportData.IPServices, IPServiceExport{
+			Name:     svc.Name,
+			URL:      svc.URL,
+			Type:     svc.Type,
+			Enabled:  svc.Enabled,
+			Priority: svc.Priority,
+		})
+	}
+
+	DBLogInfo("导出配置成功: 邮件配置1份, 监控配置1份, IP服务%d个", len(exportData.IPServices))
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Disposition", "attachment; filename=ip-monitor-config.json")
+	json.NewEncoder(w).Encode(exportData)
+}
+
+// ==================== 导入处理 ====================
+
+func handleImport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "方法不允许", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		DecryptKey string     `json:"decrypt_key"`
+		ImportMode string     `json:"import_mode"` // "smart" 或 "overwrite"
+		Data       ExportData `json:"data"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "无效的请求数据", http.StatusBadRequest)
+		return
+	}
+
+	if req.DecryptKey == "" {
+		http.Error(w, "解密密钥不能为空", http.StatusBadRequest)
+		return
+	}
+
+	// 默认智能导入
+	if req.ImportMode == "" {
+		req.ImportMode = "smart"
+	}
+
+	modeText := "智能导入"
+	if req.ImportMode == "overwrite" {
+		modeText = "覆盖导入"
+	}
+	DBLogInfo("用户开始%s配置", modeText)
+
+	// 解密密码
+	decryptedPassword := ""
+	if req.Data.EmailConfig.PasswordEncrypted && req.Data.EmailConfig.SenderPassword != "" {
+		var err error
+		decryptedPassword, err = decrypt(req.Data.EmailConfig.SenderPassword, req.DecryptKey)
+		if err != nil {
+			DBLogError("导入配置失败 - 解密密码失败: %v", err)
+			http.Error(w, fmt.Sprintf("解密密码失败: %v（密钥可能不正确）", err), http.StatusBadRequest)
+			return
+		}
+	} else if !req.Data.EmailConfig.PasswordEncrypted {
+		decryptedPassword = req.Data.EmailConfig.SenderPassword
+	}
+
+	if req.ImportMode == "overwrite" {
+		// 覆盖导入：整体替换 config
+		config = Config{
+			SenderEmail:       req.Data.EmailConfig.SenderEmail,
+			SenderPassword:    decryptedPassword,
+			SMTPServer:        req.Data.EmailConfig.SMTPServer,
+			SMTPPort:          req.Data.EmailConfig.SMTPPort,
+			Recipients:        req.Data.EmailConfig.Recipients,
+			LastPublicIPv4:    "",
+			LastPublicIPv6:    "",
+			LastAllIPs:        nil,
+			AutoMode:          req.Data.MonitorConfig.AutoMode,
+			IntervalMinutes:   req.Data.MonitorConfig.IntervalMinutes,
+			MonitorTypes:      req.Data.MonitorConfig.MonitorTypes,
+			LogRetentionHours: req.Data.MonitorConfig.LogRetentionHours,
+		}
+	} else {
+		// 智能导入：只更新非空字段
+		if req.Data.EmailConfig.SenderEmail != "" {
+			config.SenderEmail = req.Data.EmailConfig.SenderEmail
+		}
+		if decryptedPassword != "" {
+			config.SenderPassword = decryptedPassword
+		}
+		if req.Data.EmailConfig.SMTPServer != "" {
+			config.SMTPServer = req.Data.EmailConfig.SMTPServer
+		}
+		if req.Data.EmailConfig.SMTPPort > 0 {
+			config.SMTPPort = req.Data.EmailConfig.SMTPPort
+		}
+		if req.Data.EmailConfig.Recipients != nil {
+			config.Recipients = req.Data.EmailConfig.Recipients
+		}
+
+		// 更新监控配置
+		config.AutoMode = req.Data.MonitorConfig.AutoMode
+		if req.Data.MonitorConfig.IntervalMinutes > 0 {
+			config.IntervalMinutes = req.Data.MonitorConfig.IntervalMinutes
+		}
+		if req.Data.MonitorConfig.MonitorTypes != nil {
+			config.MonitorTypes = req.Data.MonitorConfig.MonitorTypes
+		}
+		if req.Data.MonitorConfig.LogRetentionHours > 0 {
+			config.LogRetentionHours = req.Data.MonitorConfig.LogRetentionHours
+		}
+	}
+
+	// 保存配置
+	if err := saveConfig(); err != nil {
+		DBLogError("导入配置失败 - 保存配置失败: %v", err)
+		http.Error(w, fmt.Sprintf("保存配置失败: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// 导入IP服务
+	importedServices := 0
+	skippedServices := 0
+	deletedServices := int64(0)
+
+	// 覆盖模式：先删除所有现有IP服务
+	if req.ImportMode == "overwrite" {
+		var err error
+		deletedServices, err = DeleteAllIPServices()
+		if err != nil {
+			DBLogError("导入配置失败 - 删除现有服务失败: %v", err)
+			http.Error(w, fmt.Sprintf("删除现有服务失败: %v", err), http.StatusInternalServerError)
+			return
+		}
+		DBLogInfo("覆盖导入: 已删除现有IP服务%d个", deletedServices)
+	}
+
+	for _, svc := range req.Data.IPServices {
+		// 尝试添加服务（如果URL已存在会失败，忽略错误继续）
+		_, err := AddIPService(svc.Name, svc.URL, svc.Type, svc.Priority)
+		if err != nil {
+			// URL已存在，跳过（仅在智能导入模式下可能发生）
+			skippedServices++
+			continue
+		}
+		importedServices++
+	}
+
+	// 重启监控（如果需要）
+	go restartIPMonitor()
+
+	var message string
+	if req.ImportMode == "overwrite" {
+		message = fmt.Sprintf("覆盖导入成功！删除原有服务%d个，导入IP服务%d个", deletedServices, importedServices)
+		DBLogInfo("覆盖导入配置成功: 邮件配置已更新, 监控配置已更新, 删除原有服务%d个, 新增IP服务%d个", 
+			deletedServices, importedServices)
+	} else {
+		message = fmt.Sprintf("智能导入成功！新增IP服务%d个，跳过%d个（已存在）", importedServices, skippedServices)
+		DBLogInfo("智能导入配置成功: 邮件配置已更新, 监控配置已更新, IP服务新增%d个, 跳过%d个(已存在)", 
+			importedServices, skippedServices)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":           true,
+		"import_mode":       req.ImportMode,
+		"imported_services": importedServices,
+		"skipped_services":  skippedServices,
+		"deleted_services":  deletedServices,
+		"message":           message,
+	})
 }

@@ -187,15 +187,10 @@ func initDefaultIPServices() error {
 		url      string
 		priority int
 	}{
-		{"ipify", "https://api.ipify.org", 1},
-		{"ipify (api4)", "https://api4.ipify.org", 2},
+		{"AWS checkip", "https://checkip.amazonaws.com", 1},
+		{"ip.sb", "https://api-ipv4.ip.sb/ip", 2},
 		{"icanhazip", "https://ipv4.icanhazip.com", 3},
-		{"AWS checkip", "https://checkip.amazonaws.com", 4},
-		{"ifconfig.me", "https://ifconfig.me/ip", 5},
-		{"ip.sb", "https://api-ipv4.ip.sb/ip", 6},
-		{"ipecho", "https://ipecho.net/plain", 7},
-		{"myexternalip", "https://myexternalip.com/raw", 8},
-		{"3322.net", "https://ip.3322.net", 9},
+		{"3322.net", "https://ip.3322.net", 4},
 	}
 
 	// 默认IPv6服务
@@ -208,6 +203,9 @@ func initDefaultIPServices() error {
 		{"icanhazip (v6)", "https://ipv6.icanhazip.com", 2},
 		{"ident.me (v6)", "https://v6.ident.me", 3},
 		{"ip.sb (v6)", "https://api-ipv6.ip.sb/ip", 4},
+		{"myexternalip", "https://myexternalip.com/raw", 5},
+		{"ifconfig", "https://ifconfig.me/ip", 6},
+		{"ipecho", "https://ipecho.net/plain", 7},
 	}
 
 	// 插入IPv4服务
@@ -403,6 +401,15 @@ func UpdateIPService(id int64, enabled bool, priority int) error {
 func DeleteIPService(id int64) error {
 	_, err := db.Exec("DELETE FROM ip_services WHERE id = ?", id)
 	return err
+}
+
+// DeleteAllIPServices 删除所有IP服务
+func DeleteAllIPServices() (int64, error) {
+	result, err := db.Exec("DELETE FROM ip_services")
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 // SaveIPFetchLog 保存IP获取日志
