@@ -259,7 +259,7 @@ func checkAndNotifyIPChange() {
 		DBLogInfo("  私网IPv6: %v", currentIPs.PrivateIPv6)
 	}
 
-	// 构建上次的IPInfo（公网IP只包含监控的类型，私网IP总是读取）
+	// 构建上次的IPInfo（根据监控配置读取对应类型的IP）
 	oldIPs := IPInfo{}
 
 	// 根据监控类型从数据库读取公网IP
@@ -274,12 +274,16 @@ func checkAndNotifyIPChange() {
 		}
 	}
 
-	// 私网IP总是从数据库读取（不管监控配置如何，因为邮件中需要显示）
-	if ips, ok := lastIPs["private_ipv4"]; ok && len(ips) > 0 {
-		oldIPs.PrivateIPv4 = ips
+	// 私网IP根据监控配置读取（避免未监控时触发误报）
+	if shouldMonitor("private_ipv4") {
+		if ips, ok := lastIPs["private_ipv4"]; ok && len(ips) > 0 {
+			oldIPs.PrivateIPv4 = ips
+		}
 	}
-	if ips, ok := lastIPs["private_ipv6"]; ok && len(ips) > 0 {
-		oldIPs.PrivateIPv6 = ips
+	if shouldMonitor("private_ipv6") {
+		if ips, ok := lastIPs["private_ipv6"]; ok && len(ips) > 0 {
+			oldIPs.PrivateIPv6 = ips
+		}
 	}
 
 	// 检查是否首次运行（数据库中没有任何上次IP记录）
@@ -480,7 +484,7 @@ func getCurrentMonitorConfig() *MonitorConfig {
 	return cfg
 }
 
-// 比较所有IP，返回变化列表（公网IP根据监控类型过滤，私网IP总是比较）
+// 比较所有IP，返回变化列表（根据监控类型过滤）
 func compareAllIPs(oldIPs, newIPs *IPInfo) []IPChange {
 	var changes []IPChange
 
@@ -787,7 +791,7 @@ func handleCheckIP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 构建上次的IPInfo（公网IP只包含监控的类型，私网IP总是读取）
+	// 构建上次的IPInfo（根据监控配置读取对应类型的IP）
 	oldIPs := IPInfo{}
 
 	// 根据监控类型从数据库读取公网IP
@@ -802,12 +806,16 @@ func handleCheckIP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 私网IP总是从数据库读取（不管监控配置如何，因为邮件中需要显示）
-	if ips, ok := lastIPs["private_ipv4"]; ok && len(ips) > 0 {
-		oldIPs.PrivateIPv4 = ips
+	// 私网IP根据监控配置读取（避免未监控时触发误报）
+	if shouldMonitor("private_ipv4") {
+		if ips, ok := lastIPs["private_ipv4"]; ok && len(ips) > 0 {
+			oldIPs.PrivateIPv4 = ips
+		}
 	}
-	if ips, ok := lastIPs["private_ipv6"]; ok && len(ips) > 0 {
-		oldIPs.PrivateIPv6 = ips
+	if shouldMonitor("private_ipv6") {
+		if ips, ok := lastIPs["private_ipv6"]; ok && len(ips) > 0 {
+			oldIPs.PrivateIPv6 = ips
+		}
 	}
 
 	// 检查是否首次运行
