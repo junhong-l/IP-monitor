@@ -44,64 +44,6 @@ chmod +x email-notify
 # http://localhost:8543
 ```
 
-## 飞牛NAS FPK 打包指南
-
-### 目录结构
-
-项目包含完整的FPK目录结构 `fnnas.ipnotify/`：
-
-```
-fnnas.ipnotify/
-├── manifest                    # 应用清单
-├── config/
-│   ├── privilege               # 权限配置
-│   └── resource                # 资源配置
-├── cmd/
-│   ├── main                    # 主控脚本（启动/停止/状态）
-│   ├── install_init            # 安装前回调
-│   ├── install_callback        # 安装后回调
-│   ├── uninstall_init          # 卸载前回调
-│   ├── uninstall_callback      # 卸载后回调
-│   ├── upgrade_init            # 升级前回调
-│   ├── upgrade_callback        # 升级后回调
-│   ├── config_init             # 配置前回调
-│   └── config_callback         # 配置后回调
-└── app/
-    ├── server/
-    │   └── email-notify        # Linux可执行文件（需编译）
-    └── ui/
-        └── config/
-            └── entry.json      # 桌面入口配置
-```
-### 步骤1：上传到飞牛NAS打包
-
-1. 将整个 `fnnas.ipnotify` 目录上传到飞牛NAS
-2. SSH登录飞牛NAS，执行：
-
-```bash 
-cd /path/to/fnnas.ipnotify
-
-# 确保脚本有执行权限
-chmod +x cmd/*
-chmod +x app/server/email-notify
-
-# 打包为fpk（fpk本质是tar.gz）
-cd /path/to/fnnas.ipnotify  
-fnpack build
-```
-
-### 步骤2：安装FPK
-
-在飞牛NAS Web界面：
-1. 进入"应用中心"
-2. 点击"手动安装"
-3. 上传 `fnnas.ipnotify.fpk` 文件
-4. 按提示完成安装
-
-```
-
-
-
 ## 📧 邮件配置
 
 Web界面内置了常用邮箱预设：
@@ -154,29 +96,60 @@ email-notify/
 - 检查防火墙设置
 - 在"IP服务管理"中测试服务可用性
 
-## 📄 开源协议
+## 飞牛NAS FPK 打包指南
 
-MIT License
+### 目录结构
 
-## 📝 更新日志
+项目包含完整的FPK目录结构 `fnnas.ipnotify/`：  
 
-### v2.1.0 (2025-12-26)
-- 🔧 修复数据库并发安全问题
-- 🔧 修复监控goroutine启动保护问题
-- 🔧 修复IP服务统计更新计算错误
-- 🔧 修复首次运行私网IP不显示问题
-- 🔧 优化IP获取超时控制(30秒整体超时)
-- 🔧 修复IPv6格式化错误处理
-- 🔧 优化日志清理scheduler,支持优雅关闭
-- ✨ 添加配置加密导出/导入功能
-- ✨ 添加信号处理器,支持优雅关闭
-- 🎨 优化邮件样式,提高可读性
+<span style="color: red;">app/server 下面的文件名称要和cmd下面的脚本里面的应用名称一致</span>
+```
+fnnas.ipnotify/
+├── manifest                    # 应用清单
+├── config/
+│   ├── privilege               # 权限配置
+│   └── resource                # 资源配置
+├── cmd/
+│   ├── main                    # 主控脚本（启动/停止/状态）
+│   ├── install_init            # 安装前回调
+│   ├── install_callback        # 安装后回调
+│   ├── uninstall_init          # 卸载前回调
+│   ├── uninstall_callback      # 卸载后回调
+│   ├── upgrade_init            # 升级前回调
+│   ├── upgrade_callback        # 升级后回调
+│   ├── config_init             # 配置前回调
+│   └── config_callback         # 配置后回调
+└── app/
+    ├── server/
+    │   └── email-notify        # Linux可执行文件（需编译）
+    └── ui/
+        └── config/
+            └── entry.json      # 桌面入口配置
+```
+### 步骤1：上传到飞牛NAS打包
 
-### v2.0.0 (2025-12-25)
-- 🎉 完全重构架构,使用SQLite数据库
-- ✨ 用户可管理IP获取服务
-- ✨ 智能重试机制和网络检测
-- ✨ 完整的日志系统
+1. 将整个 `fnnas.ipnotify` 目录上传到飞牛NAS
+2. SSH登录飞牛NAS，执行：
 
-### v1.0.0 (2025-12-19)
-- 初始版本
+```bash 
+cd /path/to/fnnas.ipnotify
+
+# 确保脚本有执行权限
+chmod +x cmd/*
+chmod +x app/server/email-notify
+
+# 打包为fpk（fpk本质是tar.gz）
+cd /path/to/fnnas.ipnotify  
+fnpack build
+```
+
+### 步骤2：安装FPK
+
+在飞牛NAS Web界面：
+1. 进入"应用中心"
+2. 点击"手动安装"
+3. 上传 `fnnas.ipnotify.fpk` 文件
+4. 按提示完成安装
+
+```
+

@@ -1,5 +1,5 @@
 appname=fnnas.ipnotify
-version=1.1.0
+version=2.1.0
 desc=IP地址监控邮件通知系统
 arch=x86_64
 display_name=IP监控
