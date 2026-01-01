@@ -98,7 +98,7 @@ func createTables() error {
 		`CREATE TABLE IF NOT EXISTS ip_services (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			name TEXT NOT NULL,
-			url TEXT NOT NULL UNIQUE,
+			url TEXT NOT NULL,
 			type TEXT NOT NULL CHECK(type IN ('ipv4', 'ipv6')),
 			enabled INTEGER DEFAULT 1,
 			priority INTEGER DEFAULT 100,
@@ -108,7 +108,8 @@ func createTables() error {
 			last_fail_at DATETIME,
 			last_ip TEXT,
 			avg_duration_ms INTEGER DEFAULT 0,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(url, type)
 		)`,
 
 		// 应用日志表
@@ -185,10 +186,11 @@ func initDefaultIPServices() error {
 		url      string
 		priority int
 	}{
-		{"AWS checkip", "https://checkip.amazonaws.com", 1},
-		{"ip.sb", "https://api-ipv4.ip.sb/ip", 2},
-		{"icanhazip", "https://ipv4.icanhazip.com", 3},
-		{"3322.net", "https://ip.3322.net", 4},
+		{"ipw.cn", "https://4.ipw.cn", 1},
+		{"AWS checkip", "https://checkip.amazonaws.com", 2},
+		{"ip.sb", "https://api-ipv4.ip.sb/ip", 3},
+		{"icanhazip", "https://ipv4.icanhazip.com", 4},
+		{"3322.net", "https://ip.3322.net", 5},
 	}
 
 	// 默认IPv6服务（只包含明确支持IPv6的服务）
@@ -197,10 +199,11 @@ func initDefaultIPServices() error {
 		url      string
 		priority int
 	}{
-		{"ipify (api6)", "https://api6.ipify.org", 1},
-		{"icanhazip (v6)", "https://ipv6.icanhazip.com", 2},
-		{"ident.me (v6)", "https://v6.ident.me", 3},
-		{"ip.sb (v6)", "https://api-ipv6.ip.sb/ip", 4},
+		{"ipw.cn (v6)", "https://6.ipw.cn", 1},
+		{"ipify (api6)", "https://api6.ipify.org", 2},
+		{"icanhazip (v6)", "https://ipv6.icanhazip.com", 3},
+		{"ident.me (v6)", "https://v6.ident.me", 4},
+		{"ip.sb (v6)", "https://api-ipv6.ip.sb/ip", 5},
 	}
 
 	// 插入IPv4服务
@@ -355,13 +358,13 @@ func GetEnabledIPServices(ipType string) ([]IPService, error) {
 
 // AddIPService 添加IP服务
 func AddIPService(name, url, ipType string, priority int) (*IPService, error) {
-	// 先检查URL是否已存在
+	// 先检查URL和类型组合是否已存在
 	var existingID int64
 	var existingName string
-	err := dbQueryRow("SELECT id, name FROM ip_services WHERE url = ?", url).Scan(&existingID, &existingName)
+	err := dbQueryRow("SELECT id, name FROM ip_services WHERE url = ? AND type = ?", url, ipType).Scan(&existingID, &existingName)
 	if err == nil {
-		// URL已存在
-		return nil, fmt.Errorf("该服务URL已存在（服务名: %s）", existingName)
+		// URL和类型组合已存在
+		return nil, fmt.Errorf("该服务URL在%s类型中已存在（服务名: %s）", ipType, existingName)
 	}
 
 	result, err := dbExec(

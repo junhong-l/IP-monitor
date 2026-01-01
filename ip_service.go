@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -39,21 +40,28 @@ func TestIPService(url string, ipType string) *IPFetchResult {
 		// IPv6可能需要更长的超时时间
 		timeout = 15 * time.Second
 		// 强制使用IPv6网络
+		dialer := &net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}
 		transport = &http.Transport{
-			DialContext: (&net.Dialer{
-				Timeout:   10 * time.Second,
-				KeepAlive: 30 * time.Second,
-			}).DialContext,
-			// 强制使用IPv6
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				// 强制使用tcp6协议（IPv6）
+				return dialer.DialContext(ctx, "tcp6", addr)
+			},
 			ForceAttemptHTTP2: true,
 		}
 	} else {
-		// IPv4使用默认设置
+		// IPv4使用tcp4协议
+		dialer := &net.Dialer{
+			Timeout:   8 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}
 		transport = &http.Transport{
-			DialContext: (&net.Dialer{
-				Timeout:   8 * time.Second,
-				KeepAlive: 30 * time.Second,
-			}).DialContext,
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				// 强制使用tcp4协议（IPv4）
+				return dialer.DialContext(ctx, "tcp4", addr)
+			},
 		}
 	}
 
