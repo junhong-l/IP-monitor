@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -155,8 +156,11 @@ func createTables() error {
 	}
 
 	for _, migration := range migrations {
-		// 忽略"duplicate column"错误
-		dbExec(migration)
+		// 只忽略"duplicate column"错误，其他错误需要记录
+		_, err := dbExec(migration)
+		if err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			DBLogError("数据库迁移失败: %v", err)
+		}
 	}
 
 	return nil
@@ -187,7 +191,7 @@ func initDefaultIPServices() error {
 		{"3322.net", "https://ip.3322.net", 4},
 	}
 
-	// 默认IPv6服务
+	// 默认IPv6服务（只包含明确支持IPv6的服务）
 	ipv6Services := []struct {
 		name     string
 		url      string
@@ -197,9 +201,6 @@ func initDefaultIPServices() error {
 		{"icanhazip (v6)", "https://ipv6.icanhazip.com", 2},
 		{"ident.me (v6)", "https://v6.ident.me", 3},
 		{"ip.sb (v6)", "https://api-ipv6.ip.sb/ip", 4},
-		{"myexternalip", "https://myexternalip.com/raw", 5},
-		{"ifconfig", "https://ifconfig.me/ip", 6},
-		{"ipecho", "https://ipecho.net/plain", 7},
 	}
 
 	// 插入IPv4服务
@@ -670,6 +671,20 @@ func CleanOldLogsWithCount(retentionHours int) (int64, error) {
 
 // StartLogCleanupScheduler 启动日志清理定时任务
 func StartLogCleanupScheduler(retentionHours int) {
+	logCleanupMu.Lock()
+	defer logCleanupMu.Unlock()
+
+	// 如果已经启动，先停止旧的
+	if logCleanupStop != nil {
+		logCleanupStopOnce.Do(func() {
+			close(logCleanupStop)
+		})
+	}
+
+	// 重置sync.Once和channel
+	logCleanupStopOnce = sync.Once{}
+	logCleanupStop = make(chan bool)
+
 	go func() {
 		ticker := time.NewTicker(1 * time.Hour)
 		defer ticker.Stop()
@@ -697,8 +712,13 @@ func StartLogCleanupScheduler(retentionHours int) {
 
 // StopLogCleanupScheduler 停止日志清理定时任务
 func StopLogCleanupScheduler() {
+	logCleanupMu.Lock()
+	defer logCleanupMu.Unlock()
+
 	if logCleanupStop != nil {
-		close(logCleanupStop)
+		logCleanupStopOnce.Do(func() {
+			close(logCleanupStop)
+		})
 		logCleanupStop = nil
 	}
 }

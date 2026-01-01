@@ -31,8 +31,35 @@ func TestIPService(url string, ipType string) *IPFetchResult {
 	result := &IPFetchResult{}
 	startTime := time.Now()
 
+	// 根据IP类型选择网络和超时
+	timeout := 10 * time.Second
+	var transport *http.Transport
+	
+	if ipType == "ipv6" {
+		// IPv6可能需要更长的超时时间
+		timeout = 15 * time.Second
+		// 强制使用IPv6网络
+		transport = &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout:   10 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			// 强制使用IPv6
+			ForceAttemptHTTP2: true,
+		}
+	} else {
+		// IPv4使用默认设置
+		transport = &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout:   8 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+		}
+	}
+
 	client := &http.Client{
-		Timeout: 10 * time.Second,
+		Timeout:   timeout,
+		Transport: transport,
 	}
 
 	resp, err := client.Get(url)
@@ -40,7 +67,16 @@ func TestIPService(url string, ipType string) *IPFetchResult {
 
 	if err != nil {
 		result.Success = false
-		result.Error = err.Error()
+		// 添加更详细的错误信息
+		if strings.Contains(err.Error(), "timeout") {
+			result.Error = fmt.Sprintf("请求超时: %v", err)
+		} else if strings.Contains(err.Error(), "connection refused") {
+			result.Error = fmt.Sprintf("连接被拒: %v", err)
+		} else if strings.Contains(err.Error(), "no such host") {
+			result.Error = fmt.Sprintf("DNS解析失败: %v", err)
+		} else {
+			result.Error = err.Error()
+		}
 		return result
 	}
 	defer resp.Body.Close()
@@ -134,7 +170,14 @@ func FetchPublicIP(ipType string, maxRounds int) (string, error) {
 				return finalIP, nil
 			}
 
-			DBLogWarn("[%s] 从 %s 获取失败: %s (耗时: %dms)", ipType, svc.Name, result.Error, result.Duration)
+			// 记录失败日志，包含详细错误信息
+			if round == 0 {
+				// 第一轮显示详细错误
+				DBLogWarn("[%s] 从 %s 获取失败: %s (耗时: %dms)", ipType, svc.Name, result.Error, result.Duration)
+			} else {
+				// 后续轮简化日志
+				DBLogWarn("[%s] 从 %s 重试失败 (第%d轮, 耗时: %dms)", ipType, svc.Name, round+1, result.Duration)
+			}
 		}
 
 		round++

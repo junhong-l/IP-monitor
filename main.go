@@ -21,6 +21,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"golang.org/x/crypto/pbkdf2"
 )
 
 //go:embed static/*
@@ -32,11 +34,14 @@ var (
 )
 
 var (
-	monitorTicker *time.Ticker
-	monitorStop   chan bool
-	monitorMu     sync.Mutex
+	monitorTicker     *time.Ticker
+	monitorStop       chan bool
+	monitorMu         sync.Mutex
+	monitorStopOnce   sync.Once
 
-	logCleanupStop chan bool
+	logCleanupStop     chan bool
+	logCleanupMu       sync.Mutex
+	logCleanupStopOnce sync.Once
 )
 
 func main() {
@@ -118,7 +123,16 @@ func main() {
 		os.Exit(0)
 	}()
 
-	if err := http.ListenAndServe(addr, nil); err != nil {
+	// 配置HTTP服务器超时
+	server := &http.Server{
+		Addr:           addr,
+		ReadTimeout:    15 * time.Second,
+		WriteTimeout:   15 * time.Second,
+		IdleTimeout:    60 * time.Second,
+		MaxHeaderBytes: 1 << 20, // 1 MB
+	}
+
+	if err := server.ListenAndServe(); err != nil {
 		log.Fatal("启动服务器失败:", err)
 	}
 }
@@ -131,9 +145,14 @@ func startIPMonitor() {
 	if monitorTicker != nil {
 		monitorTicker.Stop()
 		if monitorStop != nil {
-			close(monitorStop)
+			monitorStopOnce.Do(func() {
+				close(monitorStop)
+			})
 		}
 	}
+
+	// 重置sync.Once以便下次可以再次关闭
+	monitorStopOnce = sync.Once{}
 
 	// 从数据库读取监控配置
 	monitorCfg, err := GetMonitorConfig()
@@ -173,13 +192,10 @@ func stopIPMonitor() {
 		monitorTicker = nil
 	}
 	if monitorStop != nil {
-		// 安全关闭channel:使用select避免向已关闭channel发送
-		select {
-		case <-monitorStop:
-			// channel已关闭
-		default:
+		// 使用sync.Once确保channel只关闭一次
+		monitorStopOnce.Do(func() {
 			close(monitorStop)
-		}
+		})
 		monitorStop = nil
 	}
 	DBLogInfo("自动监控已停止")
@@ -259,31 +275,22 @@ func checkAndNotifyIPChange() {
 		DBLogInfo("  私网IPv6: %v", currentIPs.PrivateIPv6)
 	}
 
-	// 构建上次的IPInfo（根据监控配置读取对应类型的IP）
+	// 构建上次的IPInfo（获取所有类型的历史IP，不管是否监控）
+	// 这样可以在邮件中显示完整的IP信息
 	oldIPs := IPInfo{}
 
-	// 根据监控类型从数据库读取公网IP
-	if shouldMonitor("public_ipv4") {
-		if ips, ok := lastIPs["public_ipv4"]; ok && len(ips) > 0 {
-			oldIPs.PublicIPv4 = ips
-		}
+	// 从数据库读取所有类型的IP
+	if ips, ok := lastIPs["public_ipv4"]; ok && len(ips) > 0 {
+		oldIPs.PublicIPv4 = ips
 	}
-	if shouldMonitor("public_ipv6") {
-		if ips, ok := lastIPs["public_ipv6"]; ok && len(ips) > 0 {
-			oldIPs.PublicIPv6 = ips
-		}
+	if ips, ok := lastIPs["public_ipv6"]; ok && len(ips) > 0 {
+		oldIPs.PublicIPv6 = ips
 	}
-
-	// 私网IP根据监控配置读取（避免未监控时触发误报）
-	if shouldMonitor("private_ipv4") {
-		if ips, ok := lastIPs["private_ipv4"]; ok && len(ips) > 0 {
-			oldIPs.PrivateIPv4 = ips
-		}
+	if ips, ok := lastIPs["private_ipv4"]; ok && len(ips) > 0 {
+		oldIPs.PrivateIPv4 = ips
 	}
-	if shouldMonitor("private_ipv6") {
-		if ips, ok := lastIPs["private_ipv6"]; ok && len(ips) > 0 {
-			oldIPs.PrivateIPv6 = ips
-		}
+	if ips, ok := lastIPs["private_ipv6"]; ok && len(ips) > 0 {
+		oldIPs.PrivateIPv6 = ips
 	}
 
 	// 检查是否首次运行（数据库中没有任何上次IP记录）
@@ -317,13 +324,9 @@ func checkAndNotifyIPChange() {
 	if !networkOK {
 		DBLogWarn("网络断开，IP地址设为占位符，等待网络恢复")
 
-		// 断网时保存占位符IP（仅保存监控的类型）
-		if shouldMonitor("public_ipv4") {
-			SaveLastIPs("public_ipv4", []string{DisconnectedIPv4})
-		}
-		if shouldMonitor("public_ipv6") {
-			SaveLastIPs("public_ipv6", []string{DisconnectedIPv6})
-		}
+		// 断网时保存占位符IP（保存所有类型）
+		SaveLastIPs("public_ipv4", []string{DisconnectedIPv4})
+		SaveLastIPs("public_ipv6", []string{DisconnectedIPv6})
 
 		return
 	}
@@ -403,18 +406,19 @@ func checkAndNotifyIPChange() {
 		DBLogInfo("所有监控的IP地址无变化")
 	}
 
-	// 无论是否有变化，都更新数据库中的最后IP（仅保存监控的类型）
+	// 无论是否有变化，都更新数据库中的最后IP（保存所有获取到的IP）
+	// 注意：这里保存所有IP类型，不管是否监控，这样邮件中可以显示完整信息
 	if networkOK {
-		if shouldMonitor("public_ipv4") && len(currentIPs.PublicIPv4) > 0 {
+		if len(currentIPs.PublicIPv4) > 0 {
 			SaveLastIPs("public_ipv4", currentIPs.PublicIPv4)
 		}
-		if shouldMonitor("public_ipv6") && len(currentIPs.PublicIPv6) > 0 {
+		if len(currentIPs.PublicIPv6) > 0 {
 			SaveLastIPs("public_ipv6", currentIPs.PublicIPv6)
 		}
-		if shouldMonitor("private_ipv4") && len(currentIPs.PrivateIPv4) > 0 {
+		if len(currentIPs.PrivateIPv4) > 0 {
 			SaveLastIPs("private_ipv4", currentIPs.PrivateIPv4)
 		}
-		if shouldMonitor("private_ipv6") && len(currentIPs.PrivateIPv6) > 0 {
+		if len(currentIPs.PrivateIPv6) > 0 {
 			SaveLastIPs("private_ipv6", currentIPs.PrivateIPv6)
 		}
 	}
@@ -791,31 +795,21 @@ func handleCheckIP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 构建上次的IPInfo（根据监控配置读取对应类型的IP）
+	// 构建上次的IPInfo（获取所有类型的历史IP，不管是否监控）
 	oldIPs := IPInfo{}
 
-	// 根据监控类型从数据库读取公网IP
-	if shouldMonitor("public_ipv4") {
-		if ips, ok := lastIPs["public_ipv4"]; ok && len(ips) > 0 {
-			oldIPs.PublicIPv4 = ips
-		}
+	// 从数据库读取所有类型的IP
+	if ips, ok := lastIPs["public_ipv4"]; ok && len(ips) > 0 {
+		oldIPs.PublicIPv4 = ips
 	}
-	if shouldMonitor("public_ipv6") {
-		if ips, ok := lastIPs["public_ipv6"]; ok && len(ips) > 0 {
-			oldIPs.PublicIPv6 = ips
-		}
+	if ips, ok := lastIPs["public_ipv6"]; ok && len(ips) > 0 {
+		oldIPs.PublicIPv6 = ips
 	}
-
-	// 私网IP根据监控配置读取（避免未监控时触发误报）
-	if shouldMonitor("private_ipv4") {
-		if ips, ok := lastIPs["private_ipv4"]; ok && len(ips) > 0 {
-			oldIPs.PrivateIPv4 = ips
-		}
+	if ips, ok := lastIPs["private_ipv4"]; ok && len(ips) > 0 {
+		oldIPs.PrivateIPv4 = ips
 	}
-	if shouldMonitor("private_ipv6") {
-		if ips, ok := lastIPs["private_ipv6"]; ok && len(ips) > 0 {
-			oldIPs.PrivateIPv6 = ips
-		}
+	if ips, ok := lastIPs["private_ipv6"]; ok && len(ips) > 0 {
+		oldIPs.PrivateIPv6 = ips
 	}
 
 	// 检查是否首次运行
@@ -889,17 +883,17 @@ func handleCheckIP(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			// 更新数据库中的最后IP（仅保存监控的类型）
-			if shouldMonitor("public_ipv4") && len(currentIPs.PublicIPv4) > 0 {
+			// 更新数据库中的最后IP（保存所有获取到的IP）
+			if len(currentIPs.PublicIPv4) > 0 {
 				SaveLastIPs("public_ipv4", currentIPs.PublicIPv4)
 			}
-			if shouldMonitor("public_ipv6") && len(currentIPs.PublicIPv6) > 0 {
+			if len(currentIPs.PublicIPv6) > 0 {
 				SaveLastIPs("public_ipv6", currentIPs.PublicIPv6)
 			}
-			if shouldMonitor("private_ipv4") && len(currentIPs.PrivateIPv4) > 0 {
+			if len(currentIPs.PrivateIPv4) > 0 {
 				SaveLastIPs("private_ipv4", currentIPs.PrivateIPv4)
 			}
-			if shouldMonitor("private_ipv6") && len(currentIPs.PrivateIPv6) > 0 {
+			if len(currentIPs.PrivateIPv6) > 0 {
 				SaveLastIPs("private_ipv6", currentIPs.PrivateIPv6)
 			}
 		}
@@ -1297,9 +1291,13 @@ func handleDeleteIPService(w http.ResponseWriter, r *http.Request) {
 // ==================== 加密解密函数 ====================
 
 // deriveKey 从密码派生AES密钥（32字节，用于AES-256）
+// 使用PBKDF2增强安全性，防止彩虹表攻击
 func deriveKey(password string) []byte {
-	hash := sha256.Sum256([]byte(password))
-	return hash[:]
+	// 使用固定盐值（在实际生产环境中，应该为每个加密操作生成随机盐值并存储）
+	// 这里为了保持配置文件的可移植性，使用固定盐值
+	salt := []byte("ip-monitor-salt-2026")
+	// 使用10000次迭代，SHA256，生成32字节密钥
+	return pbkdf2.Key([]byte(password), salt, 10000, 32, sha256.New)
 }
 
 // encrypt 使用AES-GCM加密字符串

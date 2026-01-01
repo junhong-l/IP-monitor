@@ -2,7 +2,10 @@ module email-notify
 
 go 1.24.0
 
-require modernc.org/sqlite v1.41.0
+require (
+	golang.org/x/crypto v0.31.0
+	modernc.org/sqlite v1.41.0
+)
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
