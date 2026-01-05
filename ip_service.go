@@ -603,51 +603,49 @@ func getAllIPs() IPInfo {
 		PrivateIPv6: []string{},
 	}
 
-	// 从数据库读取上次保存的公网IP
+	// 从数据库读取上次保存的IP（不受监控配置影响，显示所有已记录的IP）
 	lastIPs, err := GetAllLastIPs()
 	if err == nil {
-		// 根据监控类型读取
-		if shouldMonitor("public_ipv4") {
-			if ips, ok := lastIPs["public_ipv4"]; ok && len(ips) > 0 {
-				// 过滤掉断网占位符
-				validIPs := []string{}
-				for _, ip := range ips {
-					if ip != "" && ip != DisconnectedIPv4 {
-						validIPs = append(validIPs, ip)
-					}
+		// 读取公网IPv4
+		if ips, ok := lastIPs["public_ipv4"]; ok && len(ips) > 0 {
+			// 过滤掉断网占位符
+			validIPs := []string{}
+			for _, ip := range ips {
+				if ip != "" && ip != DisconnectedIPv4 {
+					validIPs = append(validIPs, ip)
 				}
-				if len(validIPs) > 0 {
-					info.PublicIPv4 = validIPs
-				}
+			}
+			if len(validIPs) > 0 {
+				info.PublicIPv4 = validIPs
 			}
 		}
-		if shouldMonitor("public_ipv6") {
-			if ips, ok := lastIPs["public_ipv6"]; ok && len(ips) > 0 {
-				// 过滤掉断网占位符
-				validIPs := []string{}
-				for _, ip := range ips {
-					if ip != "" && ip != DisconnectedIPv6 {
-						validIPs = append(validIPs, ip)
-					}
-				}
-				if len(validIPs) > 0 {
-					info.PublicIPv6 = validIPs
+		
+		// 读取公网IPv6
+		if ips, ok := lastIPs["public_ipv6"]; ok && len(ips) > 0 {
+			// 过滤掉断网占位符
+			validIPs := []string{}
+			for _, ip := range ips {
+				if ip != "" && ip != DisconnectedIPv6 {
+					validIPs = append(validIPs, ip)
 				}
 			}
-		}
-		if shouldMonitor("private_ipv4") {
-			if ips, ok := lastIPs["private_ipv4"]; ok && len(ips) > 0 {
-				info.PrivateIPv4 = ips
+			if len(validIPs) > 0 {
+				info.PublicIPv6 = validIPs
 			}
 		}
-		if shouldMonitor("private_ipv6") {
-			if ips, ok := lastIPs["private_ipv6"]; ok && len(ips) > 0 {
-				info.PrivateIPv6 = ips
-			}
+		
+		// 读取私网IPv4
+		if ips, ok := lastIPs["private_ipv4"]; ok && len(ips) > 0 {
+			info.PrivateIPv4 = ips
+		}
+		
+		// 读取私网IPv6
+		if ips, ok := lastIPs["private_ipv6"]; ok && len(ips) > 0 {
+			info.PrivateIPv6 = ips
 		}
 	}
 
-	// 如果数据库中没有公网IP，则实时获取私网IP
+	// 如果数据库中没有私网IP，则实时获取（公网IP不实时获取，避免不必要的网络请求）
 	if len(info.PrivateIPv4) == 0 || len(info.PrivateIPv6) == 0 {
 		privateIPv4, privateIPv6 := GetLocalIPs()
 		if len(info.PrivateIPv4) == 0 {
