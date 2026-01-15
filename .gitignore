@@ -18,7 +18,7 @@ monitor.db-wal
 *.log
 
 # Go相关
-go.sum
+# 注意: go.sum 应该提交到 Git 以确保依赖版本一致性
 
 # IDE相关
 .vscode/
