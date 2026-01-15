@@ -73,7 +73,6 @@ jobs:
         name: fnnas-fpk-package
         path: fnnas.ipnotify/*.fpk
         if-no-files-found: error
-        compression-level: 0
 
     - name: Create Release
       if: startsWith(github.ref, 'refs/tags/v')
