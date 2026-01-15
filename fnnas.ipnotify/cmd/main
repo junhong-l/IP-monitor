@@ -7,7 +7,7 @@ PID_FILE="${TRIM_PKGVAR}/app.pid"
 DATA_DIR="${TRIM_DATA_SHARE_PATHS%%:*}"
 
 # write the command to start your program here
-CMD="${TRIM_APPDEST}/server/email-notify -port 8543"
+CMD="${TRIM_APPDEST}/server/ip-monitor -port 8543"
 
 log_msg() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> ${LOG_FILE}
