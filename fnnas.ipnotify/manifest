@@ -1,10 +1,13 @@
 appname=fnnas.ipnotify
 version=2.3.0
-desc=IP地址监控邮件通知系统
+desc=IP地址监控邮件通知系统 - 监控设备IP变化并通过邮件通知<br><br>📦 <a href="https://github.com/junhong-l/IP-monitor/releases" target="_blank">GitHub Releases - 最新版本下载</a><br>🔄 定期检查更新以获取最新功能和修复
 arch=x86_64
 display_name=IP监控
 maintainer=Junhong
+maintainer_url=https://github.com/junhong-l/IP-monitor
 distributor=Junhong
+distributor_url=https://github.com/junhong-l/IP-monitor/releases
 desktop_uidir=ui
 desktop_applaunchname=fnnas.ipnotify.Application
 source=thirdparty
+changelog=修复启动脚本中的可执行文件名错误
