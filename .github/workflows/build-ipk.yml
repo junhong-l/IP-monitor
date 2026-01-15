@@ -31,6 +31,12 @@ jobs:
         # 验证工具可用
         ./fnpack --version || echo "fnpack downloaded"
 
+    - name: Download Go dependencies
+      run: |
+        # 下载所有依赖并更新 go.sum
+        go mod download
+        go mod verify
+
     - name: Build Go binary for Linux
       run: |
         # 编译为 Linux 可执行文件
