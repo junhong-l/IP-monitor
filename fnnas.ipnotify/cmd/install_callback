@@ -22,9 +22,13 @@ if [ -n "${DATA_DIR}" ]; then
 fi
 
 # Ensure executable has proper permissions
-if [ -d "${TRIM_APPDEST}/server" ]; then
+if [ -f "${TRIM_APPDEST}/server/email-notify" ]; then
     log_msg "Setting executable permissions..."
-    chmod +x "${TRIM_APPDEST}/server/email-notify" 2>/dev/null || true
+    chmod +x "${TRIM_APPDEST}/server/email-notify"
+else
+    echo "安装包缺少 server/email-notify 可执行文件" > "${TRIM_TEMP_LOGFILE}"
+    log_msg "ERROR: server/email-notify is missing"
+    exit 1
 fi
 
 log_msg "Install callback completed."

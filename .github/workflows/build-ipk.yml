@@ -20,7 +20,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.21'
+        go-version: '1.24'
         cache: true
         cache-dependency-path: go.sum
 
@@ -42,15 +42,15 @@ jobs:
     - name: Build Go binary for Linux
       run: |
         # 编译为 Linux 可执行文件
-        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ip-monitor -ldflags="-s -w" .
-        chmod +x ip-monitor
-        ls -lh ip-monitor
+        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o email-notify -ldflags="-s -w" .
+        chmod +x email-notify
+        ls -lh email-notify
         
     - name: Upload Linux Binary
       uses: actions/upload-artifact@v4
       with:
-        name: ip-monitor-linux-amd64
-        path: ip-monitor
+        name: email-notify-linux-amd64
+        path: email-notify
         if-no-files-found: error
         compression-level: 0
         
@@ -60,10 +60,10 @@ jobs:
         mkdir -p fnnas.ipnotify/app/server
         
         # 复制编译好的可执行文件到 server 目录
-        cp ip-monitor fnnas.ipnotify/app/server/
+        cp email-notify fnnas.ipnotify/app/server/
         
         # 添加执行权限
-        chmod +x fnnas.ipnotify/app/server/ip-monitor
+        chmod +x fnnas.ipnotify/app/server/email-notify
         
         # 列出文件确认
         ls -lah fnnas.ipnotify/app/server/
@@ -92,7 +92,7 @@ jobs:
       with:
         files: |
           fnnas.ipnotify/*.fpk
-          ip-monitor
+          email-notify
         draft: false
         prerelease: false
       env:

@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/tls"
+    "encoding/base64"
 	"fmt"
 	"net"
 	"net/smtp"
@@ -459,23 +460,11 @@ func sendEmail(subject, body string) error {
 	to := emailCfg.Recipients
 
 	// 验证必要字段
-	if from == "" || password == "" || len(to) == 0 {
-		return fmt.Errorf("邮件配置不完整: 发件人或密码或收件人为空")
-	}
+    if from == "" || password == "" || len(to) == 0 {
+        return fmt.Errorf("邮件配置不完整: 发件人或密码或收件人为空")
+    }
 
-	// 构建邮件头
-	header := make(map[string]string)
-	header["From"] = from
-	header["To"] = strings.Join(to, ",")
-	header["Subject"] = "=?UTF-8?B?" + base64Encode(subject) + "?="
-	header["MIME-Version"] = "1.0"
-	header["Content-Type"] = "text/html; charset=UTF-8"
-
-	message := ""
-	for k, v := range header {
-		message += fmt.Sprintf("%s: %s\r\n", k, v)
-	}
-	message += "\r\n" + body
+    message := buildEmailMessage(from, to, subject, body)
 
 	addr := fmt.Sprintf("%s:%d", smtpServer, smtpPort)
 
@@ -487,6 +476,72 @@ func sendEmail(subject, body string) error {
 		// TLS方式 (587端口等)
 		return sendMailTLS(addr, from, password, smtpServer, to, []byte(message))
 	}
+}
+
+// buildEmailMessage 构建符合 SMTP 行长度要求的 MIME 邮件。
+func buildEmailMessage(from string, to []string, subject, body string) string {
+	return fmt.Sprintf(
+		"From: %s\r\n"+
+			"To: %s\r\n"+
+			"Subject: =?UTF-8?B?%s?=\r\n"+
+			"MIME-Version: 1.0\r\n"+
+			"Content-Type: text/html; charset=UTF-8\r\n"+
+			"Content-Transfer-Encoding: base64\r\n"+
+			"\r\n%s",
+		from,
+		foldAddressHeader(to),
+		base64Encode(subject),
+		encodeBase64Body(body),
+	)
+}
+
+// foldAddressHeader 以空白开头的续行折叠 To 头，避免其单行超出 SMTP 限制。
+func foldAddressHeader(addresses []string) string {
+	const maxRecommendedLineLength = 78
+	const headerPrefixLength = len("To: ")
+
+	var builder strings.Builder
+	lineLength := headerPrefixLength
+	for i, address := range addresses {
+		if i == 0 {
+			builder.WriteString(address)
+			lineLength += len(address)
+			continue
+		}
+
+		if lineLength+len(", ")+len(address) > maxRecommendedLineLength {
+			builder.WriteString(",\r\n ")
+			builder.WriteString(address)
+			lineLength = 1 + len(address)
+			continue
+		}
+
+		builder.WriteString(", ")
+		builder.WriteString(address)
+		lineLength += len(", ") + len(address)
+	}
+
+	return builder.String()
+}
+
+// encodeBase64Body 使用每行 76 字符的 Base64 编码，避免 HTML 或 IPv6 内容产生超长 SMTP 数据行。
+func encodeBase64Body(body string) string {
+	encoded := base64.StdEncoding.EncodeToString([]byte(body))
+	if encoded == "" {
+		return ""
+	}
+
+	const maxLineLength = 76
+	var builder strings.Builder
+	for len(encoded) > maxLineLength {
+		builder.WriteString(encoded[:maxLineLength])
+		builder.WriteString("\r\n")
+		encoded = encoded[maxLineLength:]
+	}
+	builder.WriteString(encoded)
+	builder.WriteString("\r\n")
+
+	return builder.String()
 }
 
 // 使用TLS发送邮件（端口587，STARTTLS方式）

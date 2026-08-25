@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,8 +30,9 @@ import (
 var staticFiles embed.FS
 
 var (
-	port   = flag.Int("port", 8543, "服务监听端口（默认8543）")
-	dbFile = "data.db"
+	port    = flag.Int("port", 8543, "服务监听端口（默认8543）")
+	dataDir = flag.String("data-dir", "", "数据存储目录（默认当前工作目录）")
+	dbFile  = "data.db"
 )
 
 var (
@@ -46,6 +48,12 @@ var (
 
 func main() {
 	flag.Parse()
+	if *dataDir != "" {
+		if err := os.MkdirAll(*dataDir, 0750); err != nil {
+			log.Fatalf("创建数据目录失败: %v", err)
+		}
+		dbFile = filepath.Join(*dataDir, "data.db")
+	}
 
 	// 初始化数据库
 	if err := InitDatabase(dbFile); err != nil {
@@ -206,6 +214,7 @@ func restartIPMonitor() {
 	monitorCfg, err := GetMonitorConfig()
 	if err == nil && monitorCfg.AutoMode {
 		startIPMonitor()
+		go checkAndNotifyIPChange()
 	}
 }
 
@@ -378,7 +387,8 @@ func checkAndNotifyIPChange() {
 		}
 	}
 
-	// 如果有变化，发送通知并更新数据库
+	// 如果有变化，发送通知；仅在通知成功后更新IP基准，避免发送失败时丢失通知。
+	notificationSent := len(changes) == 0
 	if len(changes) > 0 {
 		// 记录详细的IP变化
 		for _, change := range changes {
@@ -400,10 +410,15 @@ func checkAndNotifyIPChange() {
 				DBLogError("发送邮件失败: %v", err)
 			} else {
 				DBLogInfo("邮件通知发送成功，收件人: %v", emailCfg.Recipients)
+				notificationSent = true
 			}
 		}
 	} else {
 		DBLogInfo("所有监控的IP地址无变化")
+	}
+	if !notificationSent {
+		DBLogWarn("IP变化通知未成功发送，保留原IP基准，将在下个监控周期重试")
+		return
 	}
 
 	// 无论是否有变化，都更新数据库中的最后IP（保存所有获取到的IP）
@@ -686,9 +701,10 @@ func handleSaveMonitorConfig(w http.ResponseWriter, r *http.Request) {
 	// 获取当前配置
 	currentCfg, _ := GetMonitorConfig()
 
-	// 检查是否需要重启监控
+	// 检查是否需要重启监控。监控类型变更后也立即检查一次，避免等待完整周期。
 	needRestart := currentCfg.AutoMode != monitorConfig.AutoMode ||
-		currentCfg.IntervalMinutes != monitorConfig.IntervalMinutes
+		currentCfg.IntervalMinutes != monitorConfig.IntervalMinutes ||
+		!equalStringSlices(currentCfg.MonitorTypes, monitorConfig.MonitorTypes)
 
 	// 更新配置
 	currentCfg.AutoMode = monitorConfig.AutoMode
@@ -871,9 +887,9 @@ func handleCheckIP(w http.ResponseWriter, r *http.Request) {
 		if changed {
 			result.Message = "检测到IP地址变化"
 
-			// 发送通知邮件
+			// 发送通知邮件；失败时不覆盖IP基准，后续自动检查可重试。
 			emailCfg := getCurrentEmailConfig()
-			if emailCfg.SenderEmail != "" && len(emailCfg.Recipients) > 0 {
+			if emailCfg.SenderEmail != "" && emailCfg.SenderPassword != "" && len(emailCfg.Recipients) > 0 {
 				err := sendAllIPChangeNotification(&oldIPs, &currentIPs, changes)
 				if err != nil {
 					result.Message = fmt.Sprintf("IP变化已检测，但邮件发送失败: %v", err)
@@ -881,26 +897,41 @@ func handleCheckIP(w http.ResponseWriter, r *http.Request) {
 					result.EmailSent = true
 					result.Message = "IP变化已检测，邮件通知已发送"
 				}
+			} else {
+				result.Message = "IP变化已检测，但邮件配置不完整"
 			}
 
-			// 更新数据库中的最后IP（保存所有获取到的IP）
-			if len(currentIPs.PublicIPv4) > 0 {
-				SaveLastIPs("public_ipv4", currentIPs.PublicIPv4)
-			}
-			if len(currentIPs.PublicIPv6) > 0 {
-				SaveLastIPs("public_ipv6", currentIPs.PublicIPv6)
-			}
-			if len(currentIPs.PrivateIPv4) > 0 {
-				SaveLastIPs("private_ipv4", currentIPs.PrivateIPv4)
-			}
-			if len(currentIPs.PrivateIPv6) > 0 {
-				SaveLastIPs("private_ipv6", currentIPs.PrivateIPv6)
+			// 仅在邮件已成功发送后更新数据库中的最后IP（保存所有获取到的IP）。
+			if result.EmailSent {
+				if len(currentIPs.PublicIPv4) > 0 {
+					SaveLastIPs("public_ipv4", currentIPs.PublicIPv4)
+				}
+				if len(currentIPs.PublicIPv6) > 0 {
+					SaveLastIPs("public_ipv6", currentIPs.PublicIPv6)
+				}
+				if len(currentIPs.PrivateIPv4) > 0 {
+					SaveLastIPs("private_ipv4", currentIPs.PrivateIPv4)
+				}
+				if len(currentIPs.PrivateIPv6) > 0 {
+					SaveLastIPs("private_ipv6", currentIPs.PrivateIPv6)
+				}
 			}
 		}
 	}
-
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
+}
+
+func equalStringSlices(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // 获取监控状态

@@ -102,7 +102,7 @@ email-notify/
 
 项目包含完整的FPK目录结构 `fnnas.ipnotify/`：  
 
-<span style="color: red;">app/server 下面的文件名称要和cmd下面的脚本里面的应用名称一致</span>
+<span style="color: red;">`app/server` 下必须包含 Linux amd64 可执行文件 `email-notify`，文件名必须与 `cmd/main` 一致。</span>
 ```
 fnnas.ipnotify/
 ├── manifest                    # 应用清单
@@ -121,15 +121,22 @@ fnnas.ipnotify/
 │   └── config_callback         # 配置后回调
 └── app/
     ├── server/
-    │   └── email-notify        # Linux可执行文件（需编译）
+    │   └── email-notify        # Linux amd64 可执行文件（需编译后复制）
     └── ui/
         └── config/
-            └── entry.json      # 桌面入口配置
+            └── config          # 桌面入口配置
 ```
 ### 步骤1：上传到飞牛NAS打包
 
-1. 将整个 `fnnas.ipnotify` 目录上传到飞牛NAS
-2. SSH登录飞牛NAS，执行：
+1. 在 Windows 项目根目录交叉编译并放入 FPK：
+
+```powershell
+$env:GOOS="linux"; $env:GOARCH="amd64"; $env:CGO_ENABLED="0"
+go build -buildvcs=false -ldflags="-s -w" -o fnnas.ipnotify/app/server/email-notify .
+```
+
+2. 将整个 `fnnas.ipnotify` 目录上传到飞牛NAS。
+3. SSH登录飞牛NAS，执行：
 
 ```bash 
 cd /path/to/fnnas.ipnotify

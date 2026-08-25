@@ -70,7 +70,15 @@ func TestIPService(url string, ipType string) *IPFetchResult {
 		Transport: transport,
 	}
 
-	resp, err := client.Get(url)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		result.Success = false
+		result.Error = fmt.Sprintf("创建请求失败: %v", err)
+		return result
+	}
+	req.Header.Set("User-Agent", "IP-monitor/1.0")
+
+	resp, err := client.Do(req)
 	result.Duration = time.Since(startTime).Milliseconds()
 
 	if err != nil {

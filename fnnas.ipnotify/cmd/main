@@ -2,15 +2,11 @@
 
 LOG_FILE="${TRIM_PKGVAR}/info.log"
 PID_FILE="${TRIM_PKGVAR}/app.pid"
-
-# data directory for config.json
-DATA_DIR="${TRIM_DATA_SHARE_PATHS%%:*}"
-
-# write the command to start your program here
-CMD="${TRIM_APPDEST}/server/ip-monitor -port 8543"
+APP_BINARY="${TRIM_APPDEST}/server/email-notify"
+SERVICE_PORT="${TRIM_SERVICE_PORT:-8543}"
 
 log_msg() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> ${LOG_FILE}
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "${LOG_FILE}"
 }
 
 start_process() {
@@ -18,17 +14,27 @@ start_process() {
         return 0
     fi
 
-    log_msg "Starting process ..."
-    
-    # change to server directory for static files
-    cd ${TRIM_APPDEST}/server
-    
-    # run the process
-    bash -c "${CMD}" >> ${LOG_FILE} 2>&1 &
-    
-    # write pid to pidfile
-    printf "%s" "$!" > ${PID_FILE}
-    
+    mkdir -p "${TRIM_PKGVAR}"
+    if [ ! -x "${APP_BINARY}" ]; then
+        echo "未找到可执行文件：${APP_BINARY}" > "${TRIM_TEMP_LOGFILE}"
+        log_msg "ERROR: executable not found or not executable: ${APP_BINARY}"
+        return 1
+    fi
+
+    log_msg "Starting ${APP_BINARY} on port ${SERVICE_PORT}"
+    (
+        cd "${TRIM_APPDEST}/server" || exit 1
+        exec "${APP_BINARY}" -port "${SERVICE_PORT}" -data-dir "${TRIM_PKGVAR}"
+    ) >> "${LOG_FILE}" 2>&1 &
+    printf "%s" "$!" > "${PID_FILE}"
+
+    sleep 1
+    if ! status; then
+        echo "应用启动失败，请查看 ${LOG_FILE}" > "${TRIM_TEMP_LOGFILE}"
+        log_msg "ERROR: process exited immediately"
+        rm -f "${PID_FILE}"
+        return 1
+    fi
     return 0
 }
 
@@ -46,7 +52,7 @@ stop_process() {
         fi
 
         log_msg "send TERM signal to PID:${pid}..."
-        kill -TERM ${pid} >> ${LOG_FILE} 2>&1
+        kill -TERM "${pid}" >> "${LOG_FILE}" 2>&1
 
         local count=0
         while check_process "${pid}" && [ $count -lt 10 ]; do
@@ -92,9 +98,10 @@ status() {
     return 1
 }
 
-case $1 in
+case "$1" in
 start)
     start_process
+    exit $?
     ;;
 stop)
     stop_process
